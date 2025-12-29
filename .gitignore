@@ -1,0 +1,22 @@
+# Next.js
+node_modules/
+.next/
+out/
+build/
+
+# Python / Flask
+venv/
+.venv/
+__pycache__/
+*.pyc
+instance/
+.pytest_cache/
+
+# Environment Variables (Bảo mật - Rất quan trọng)
+.env
+.env.local
+.env.development.local
+
+# OS files
+.DS_Store
+Thumbs.db

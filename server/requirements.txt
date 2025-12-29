@@ -1,0 +1,17 @@
+Flask==2.3.3
+Flask-PyMongo==2.3.0
+Flask-Cors==4.0.0
+python-dotenv==1.0.0
+bcrypt==4.1.0
+pymongo==4.5.0
+email-validator==2.1.0
+Flask-Login==0.6.3
+
+# Zalo / Real-time / Scheduler / Redis / AI deps
+requests==2.31.0
+Flask-SocketIO==5.3.2
+python-socketio==5.9.0
+eventlet==0.40.4
+redis==7.1.0
+Flask-APScheduler==1.13.1
+openai==0.27.0

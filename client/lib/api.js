@@ -40,6 +40,7 @@ export async function apiCall(method, endpoint, data = null) {
       method,
       headers: {
         'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
       },
     };
 
@@ -138,6 +139,7 @@ export async function fetchProfile(accountId) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': 'true',
       },
     };
 
@@ -304,6 +306,7 @@ export async function listChatbots(accountId) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': 'true',
       },
     });
 

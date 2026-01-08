@@ -39,6 +39,15 @@ class Config:
     ZALO_VERIFICATION_TOKEN = os.getenv('ZALO_VERIFICATION_TOKEN', 'change-me')
     ZALO_API_BASE = os.getenv('ZALO_API_BASE', 'https://oauth.zaloapp.com')
 
+    # Facebook App/Page configuration
+    FB_APP_ID = os.getenv('FB_APP_ID', '790841927348768')
+    FB_APP_SECRET = os.getenv('FB_APP_SECRET', '6eff056e7ef1aa7dfd8115d91380c2d1')
+    FB_REDIRECT_URI = os.getenv('FB_REDIRECT_URI', 'https://nicola-unstagnant-limpidly.ngrok-free.dev/api/facebook/callback')
+    FB_VERIFICATION_TOKEN = os.getenv('FB_VERIFICATION_TOKEN', 'change-me')
+    FB_API_BASE = os.getenv('FB_API_BASE', 'https://graph.facebook.com')
+    FB_API_VERSION = os.getenv('FB_API_VERSION', 'v17.0')
+    FB_SCOPE = os.getenv('FB_SCOPE', 'pages_show_list,pages_messaging,pages_manage_metadata,public_profile')
+
     # Redis for PKCE and short-lived data (use for production)
     REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 

@@ -141,3 +141,16 @@ class IntegrationModel:
             update['meta'] = meta
         res = self.collection.find_one_and_update({'_id': ObjectId(integration_id)}, {'$set': update}, return_document=True)
         return self._serialize(res)
+
+    def update_profile(self, integration_id, name=None, avatar_url=None, meta=None):
+        """Update the profile fields (name, avatar, meta) for an integration."""
+        update = {'updated_at': datetime.utcnow()}
+        if name is not None:
+            update['name'] = name
+            update['oa_name'] = name
+        if avatar_url is not None:
+            update['avatar_url'] = avatar_url
+        if meta is not None:
+            update['meta'] = meta
+        res = self.collection.find_one_and_update({'_id': ObjectId(integration_id)}, {'$set': update}, return_document=True)
+        return self._serialize(res)

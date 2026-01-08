@@ -74,6 +74,13 @@ def create_app(env=None):
     # Register Zalo blueprint (OAuth, Webhooks)
     app.register_blueprint(zalo_bp)
 
+    # Register Facebook blueprint (OAuth, Webhooks)
+    try:
+        from routes.facebook import facebook_bp, refresh_expiring_tokens as facebook_refresh
+        app.register_blueprint(facebook_bp)
+    except Exception as e:
+        logger.info(f"Facebook routes not available: {e}")
+
     # Register integrations management
     from routes.integrations import integrations_bp
     app.register_blueprint(integrations_bp)
@@ -93,6 +100,13 @@ def create_app(env=None):
     # Schedule Zalo token refresh every 30 minutes
     try:
         scheduler.add_job(id='zalo_token_refresh', func=lambda: refresh_expiring_tokens(app.mongo_client), trigger='interval', minutes=30)
+    except Exception:
+        # If job exists or cannot be added, ignore
+        pass
+
+    # Schedule Facebook token refresh every 30 minutes (if available)
+    try:
+        scheduler.add_job(id='facebook_token_refresh', func=lambda: facebook_refresh(app.mongo_client), trigger='interval', minutes=30)
     except Exception:
         # If job exists or cannot be added, ignore
         pass

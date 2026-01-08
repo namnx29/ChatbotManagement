@@ -127,18 +127,45 @@ export default function PlatformIntegrationPage() {
     }
   };
 
-  const fetchIntegrations = async () => {
+  const fetchIntegrations = async (platformOverride = null) => {
     setLoadingInts(true);
     try {
       const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
       const chatbotId = getChatbotIdFromPath();
-      const url = chatbotId ? `${base}/api/integrations?platform=zalo&chatbotId=${encodeURIComponent(chatbotId)}` : `${base}/api/integrations?platform=zalo`;
+      // Determine platform: explicit override -> selectedPlatform state ("all" means no platform filter)
+      const platform = platformOverride !== null ? platformOverride : (selectedPlatform === "all" ? null : selectedPlatform);
+      let url = `${base}/api/integrations`;
+      const qs = [];
+      if (platform) qs.push(`platform=${encodeURIComponent(platform)}`);
+      if (chatbotId) qs.push(`chatbotId=${encodeURIComponent(chatbotId)}`);
+      if (qs.length) url += `?${qs.join("&")}`;
+
       const res = await fetch(url, {
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json",
+          "ngrok-skip-browser-warning": "true",
           "X-Account-Id": localStorage.getItem("accountId") || "test-account",
         },
       });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await res.text();
+        console.error("Unexpected non-JSON response when requesting integrations:", text);
+        Modal.error({
+          title: 'Failed to load integrations',
+          content: (
+            <div>
+              <p>Unexpected response from server when requesting integrations.</p>
+              <pre style={{ maxHeight: 200, overflow: 'auto' }}>{String(text).slice(0, 1000)}</pre>
+              <p style={{ marginTop: 8 }}>Possible causes: backend not running, incorrect <code>NEXT_PUBLIC_API_URL</code>, or a temporary tunnel/ngrok error.</p>
+            </div>
+          ),
+        });
+        return [];
+      }
+
       const data = await res.json();
       if (data && data.success) {
         setIntegrations(data.data || []);
@@ -167,25 +194,34 @@ export default function PlatformIntegrationPage() {
         const conflict_chatbotId = qs.get("conflict_chatbotId");
         const conflict_chatbotName = qs.get("conflict_chatbotName");
         const other_oa_id = qs.get("other_oa_id");
-        if (oa_id && qs.get("platform") === "zalo" && !notifiedRef.current) {
+        const platform = qs.get("platform");
+
+        // If callback provided a platform, set the UI filter so the correct list is shown
+        if (platform && (platform === 'zalo' || platform === 'facebook')) {
+          setSelectedPlatform(platform);
+        }
+
+        if (oa_id && platform && !notifiedRef.current) {
           notifiedRef.current = true
-          // Refresh list first
-          const list = await fetchIntegrations();
+          // Refresh list for the specific platform so the new integration will be visible
+          const list = await fetchIntegrations(platform);
           const found = (list || []).find((it) => it && it.oa_id === oa_id);
+
+          const platformLabel = platform === 'facebook' ? 'Facebook Page' : 'Zalo OA'
 
           if (status === "already") {
             const display = found ? (found.name || found.oa_name || found.oa_id) : oa_id
-            message.info(`Zalo OA already connected: ${display}`);
+            message.info(`${platformLabel} already connected: ${display}`);
           } else if (status === "connected") {
             const display = found ? (found.name || found.oa_name || found.oa_id) : oa_id
-            message.success(`Zalo OA connected: ${display}`);
+            message.success(`${platformLabel} connected: ${display}`);
           } else if (status === "conflict") {
             // handle conflict types
             if (conflict_type === "oa_assigned") {
               const name = conflict_chatbotName || conflict_chatbotId || "another chatbot"
               Modal.confirm({
-                title: 'OA đã được kết nối',
-                content: `Nền tảng Zalo này đã được kết nối với bot "${name}". Vui lòng chuyển đến bot đó để hủy kết nối trước khi thêm vào bot này.`,
+                title: `${platformLabel} đã được kết nối`,
+                content: `Nền tảng ${platformLabel} này đã được kết nối với bot "${name}". Vui lòng chuyển đến bot đó để hủy kết nối trước khi thêm vào bot này.`,
                 okText: 'Đến bot',
                 cancelText: 'Đóng',
                 onOk: () => {
@@ -216,6 +252,12 @@ export default function PlatformIntegrationPage() {
     init();
   }, []);
 
+  // Refetch integrations when platform filter changes so UI reflects selected platform
+  useEffect(() => {
+    // Avoid fetching twice on initial mount (init already fetched), but refetch when user changes platform
+    fetchIntegrations();
+  }, [selectedPlatform]);
+
   const renderZaloContent = () => (
     <PlatformConnectTemplate
       title="Kết nối với Test Zalo"
@@ -238,6 +280,8 @@ export default function PlatformIntegrationPage() {
             mode: "cors",
             headers: {
               "Content-Type": "application/json",
+              "Accept": "application/json",
+              "ngrok-skip-browser-warning": "true",
               "X-Account-Id":
                 localStorage.getItem("accountId") || "test-account",
             },
@@ -250,9 +294,16 @@ export default function PlatformIntegrationPage() {
               "Unexpected non-JSON response when requesting Zalo auth url:",
               text
             );
-            alert(
-              "Unexpected response from server. Check backend URL and CORS."
-            );
+            Modal.error({
+              title: 'Failed to initiate Zalo connection',
+              content: (
+                <div>
+                  <p>Unexpected response from server when requesting auth URL.</p>
+                  <pre style={{ maxHeight: 200, overflow: 'auto' }}>{String(text).slice(0, 1000)}</pre>
+                  <p style={{ marginTop: 8 }}>Possible causes: backend not running, incorrect <code>NEXT_PUBLIC_API_URL</code>, or a temporary tunnel/ngrok error.</p>
+                </div>
+              ),
+            });
             return;
           }
 
@@ -261,7 +312,7 @@ export default function PlatformIntegrationPage() {
             window.location.href = data.auth_url;
           } else {
             console.error("Failed to get Zalo auth url", data);
-            alert("Could not initiate Zalo connection");
+            Modal.error({ title: 'Could not initiate Zalo connection', content: JSON.stringify(data) });
           }
         } catch (err) {
           console.error(err);
@@ -271,8 +322,55 @@ export default function PlatformIntegrationPage() {
     />
   );
 
-  const handlePlatformLogin = (platformKey) => {
-    // Placeholder for future platform login flows. Keep silent in production.
+  const handlePlatformLogin = async (platformKey) => {
+    if (platformKey === 'facebook') {
+      try {
+        const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+        const chatbotId = getChatbotIdFromPath();
+        const url = chatbotId ? `${base}/api/facebook/auth-url?chatbotId=${chatbotId}` : `${base}/api/facebook/auth-url`;
+        const res = await fetch(url, {
+          method: 'GET',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'ngrok-skip-browser-warning': 'true',
+            'X-Account-Id': localStorage.getItem('accountId') || 'test-account',
+          },
+        });
+
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+          const text = await res.text();
+          console.error('Unexpected non-JSON response when requesting Facebook auth url:', text);
+          Modal.error({
+            title: 'Failed to initiate Facebook connection',
+            content: (
+              <div>
+                <p>Unexpected response from server when requesting auth URL.</p>
+                <pre style={{maxHeight:200, overflow:'auto'}}>{String(text).slice(0, 1000)}</pre>
+                <p style={{marginTop:8}}>Possible causes: backend not running, incorrect <code>NEXT_PUBLIC_API_URL</code>, or a temporary tunnel/ngrok error.</p>
+              </div>
+            ),
+          });
+          return;
+        }
+
+        const data = await res.json();
+        if (data && data.auth_url) {
+          window.location.href = data.auth_url;
+        } else {
+          console.error('Failed to get Facebook auth url', data);
+          Modal.error({ title: 'Could not initiate Facebook connection', content: JSON.stringify(data) });
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Failed to connect to backend');
+      }
+      return;
+    }
+
+    // Placeholder for other platforms; keep silent in production.
     if (process.env.NODE_ENV === 'development') {
       console.debug(`[DEV] Platform login clicked: ${platformKey}`);
     }

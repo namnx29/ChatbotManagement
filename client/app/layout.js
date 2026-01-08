@@ -2,6 +2,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { App, ConfigProvider } from "antd";
+import { Suspense } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -21,19 +22,19 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
         <AntdRegistry>
-          <ConfigProvider
-            theme={{
-              token: {
-                colorPrimary: "#6c3fb5",
-              },
-            }}
-          >
-            <App>{children}</App>
+          <ConfigProvider theme={{ token: { colorPrimary: "#6c3fb5" } }}>
+            <App>
+              {/* Wrap children in Suspense here */}
+              <Suspense fallback={null}> 
+                {children}
+              </Suspense>
+            </App>
           </ConfigProvider>
         </AntdRegistry>
       </body>
     </html>
   );
 }
+

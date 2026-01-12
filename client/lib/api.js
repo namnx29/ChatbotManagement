@@ -27,6 +27,35 @@ export function getAvatarUrl(avatarPath) {
 }
 
 /**
+ * Helper to parse fetch responses and handle non-JSON error payloads gracefully.
+ */
+async function parseResponse(response) {
+  // Clone response if body has been used (for logging purposes)
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      const json = await response.json();
+      return json;
+    } catch (e) {
+      console.error('Failed to parse JSON response:', e);
+      // If body was already consumed, we can't read it again
+      if (response.bodyUsed) {
+        return { success: false, message: 'Response body already consumed' };
+      }
+      throw e;
+    }
+  }
+  // Attempt to read text body for better diagnostics
+  const txt = await response.text();
+  try {
+    // If it's HTML (likely a redirect/login page), include it in error
+    return { success: false, message: `Non-JSON response: ${txt.substring(0, 400)}` };
+  } catch (e) {
+    return { success: false, message: 'Non-JSON response' };
+  }
+}
+
+/**
  * Make an API call to the backend
  * @param {string} method - HTTP method (GET, POST, etc.)
  * @param {string} endpoint - API endpoint (e.g., '/register', '/login')
@@ -51,7 +80,7 @@ export async function apiCall(method, endpoint, data = null) {
     const url = `${API_BASE_URL}/api${endpoint}`;
     const response = await fetch(url, config);
 
-    const result = await response.json();
+    const result = await parseResponse(response);
 
     if (!response.ok) {
       throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
@@ -317,6 +346,184 @@ export async function listChatbots(accountId) {
     return result;
   } catch (error) {
     console.error('API Error [GET /chatbots]:', error);
+    throw error;
+  }
+}
+
+/**
+ * List integrations (platform-specific) for an account
+ * @param {string} accountId
+ * @param {string} platform
+ */
+export async function listIntegrations(accountId, platform = null) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const url = new URL(`${API_BASE_URL}/api/integrations`);
+    if (platform) url.searchParams.append('platform', platform);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': 'true',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('listIntegrations error response:', errorText);
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await parseResponse(response);
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /integrations]:', error);
+    throw error;
+  }
+}
+
+/**
+ * List conversations for a Facebook Page (oa_id)
+ * @param {string} accountId
+ * @param {string} oa_id
+ */
+export async function listFacebookConversations(accountId, oa_id) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const url = new URL(`${API_BASE_URL}/api/facebook/conversations`);
+    url.searchParams.append('oa_id', oa_id);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': 'true',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('listFacebookConversations error response:', errorText);
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await parseResponse(response);
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /facebook/conversations]:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get messages for a conversation
+ * @param {string} accountId
+ * @param {string} convId
+ * @param {object} opts - { limit, skip }
+ */
+export async function getConversationMessages(accountId, convId, opts = {}) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const url = new URL(`${API_BASE_URL}/api/facebook/conversations/${encodeURIComponent(convId)}/messages`);
+    if (opts.limit) url.searchParams.append('limit', opts.limit);
+    if (opts.skip) url.searchParams.append('skip', opts.skip);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /facebook/conversations/:id/messages]:', error);
+    throw error;
+  }
+}
+
+export async function markConversationRead(accountId, convId) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/facebook/conversations/${encodeURIComponent(convId)}/mark-read`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /facebook/conversations/:id/mark-read]:', error);
+    throw error;
+  }
+}
+/**
+ * Send a message from a conversation (this will forward to Facebook)
+ * @param {string} accountId
+ * @param {string} convId
+ * @param {string} text
+ */
+export async function sendConversationMessage(accountId, convId, text) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/facebook/conversations/${encodeURIComponent(convId)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ text }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /facebook/conversations/:id/messages]:', error);
+    throw error;
+  }
+}
+
+
+/**
+ * Send an attachment (image) in a conversation. imageData should be a data URL or an accessible URL.
+ */
+export async function sendConversationAttachment(accountId, convId, imageData, text = null) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/facebook/conversations/${encodeURIComponent(convId)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ image: imageData, text }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /facebook/conversations/:id/messages (attachment)]:', error);
     throw error;
   }
 }

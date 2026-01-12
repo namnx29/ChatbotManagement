@@ -2,6 +2,8 @@
 """
 Test Authentication Backend - Flask Application
 """
+import eventlet
+eventlet.monkey_patch()
 
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
@@ -89,7 +91,7 @@ def create_app(env=None):
     app.mongo_client = mongo_client
 
     # Initialize Socket.IO
-    app.socketio = SocketIO(app, cors_allowed_origins=app.config['CORS_ORIGINS'], async_mode='eventlet')
+    app.socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
     # Initialize APScheduler for token refresh jobs
     scheduler = APScheduler()

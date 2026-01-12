@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
 from models.integration import IntegrationModel
 from utils.redis_client import set_key, get_key, del_key
-from utils.ai_service import generate_reply
 from config import Config
 import logging
 import secrets
@@ -289,6 +288,8 @@ def webhook_event():
     event_type = data.get('event') or (data.get('data') or {}).get('event')
     message = None
     sender_id = None
+    recipient_id = None
+    direction = 'in'  # Default to incoming
 
     # Attempt to find message contents
     try:
@@ -297,16 +298,25 @@ def webhook_event():
             # Text
             if d.get('type') == 'user_send_text':
                 message = d.get('text')
-                sender_id = d.get('sender')
+                sender_id = d.get('sender') or d.get('user_id')
                 event_type = 'user_send_text'
+                direction = 'in'
+            elif d.get('type') == 'oa_send_text' or d.get('type') == 'oa_reply':
+                # Outgoing message from OA
+                message = d.get('text') or d.get('message')
+                recipient_id = d.get('recipient') or d.get('user_id')
+                sender_id = oa_id  # OA is the sender
+                direction = 'out'
             else:
                 # generic handlers
                 message = d.get('text') or d.get('message') or None
-                sender_id = d.get('sender') or (d.get('from') or {}).get('id')
+                sender_id = d.get('sender') or d.get('user_id') or (d.get('from') or {}).get('id')
+                recipient_id = d.get('recipient') or (d.get('to') or {}).get('id')
         else:
             # fallback raw structure
             message = data.get('text') or (data.get('message') or {}).get('text')
-            sender_id = data.get('sender') or (data.get('from') or {}).get('id')
+            sender_id = data.get('sender') or data.get('user_id') or (data.get('from') or {}).get('id')
+            recipient_id = data.get('recipient') or (data.get('to') or {}).get('id')
     except Exception as e:
         logger.warning(f"Failed to extract message fields: {e}")
 
@@ -324,38 +334,145 @@ def webhook_event():
         logger.info('Integration not found or inactive; ignoring message')
         return jsonify({'success': False, 'message': 'Integration not active or not found'}), 200
 
-    # Emit socket event to frontend admin
+    # CRITICAL FIX: Determine customer_id
+    # If sender_id == oa_id (outgoing), customer is recipient_id
+    # Otherwise, customer is sender_id
+    if direction == 'out' or sender_id == oa_id:
+        customer_platform_id = recipient_id
+    else:
+        customer_platform_id = sender_id
+
+    if not customer_platform_id:
+        logger.warning('No customer identified in Zalo webhook message')
+        return jsonify({'success': True}), 200
+
+    # Import models
+    from models.customer import CustomerModel
+    from models.conversation import ConversationModel
+    from models.message import MessageModel
+    
+    customer_model = CustomerModel(current_app.mongo_client)
+    conversation_model = ConversationModel(current_app.mongo_client)
+    message_model = MessageModel(current_app.mongo_client)
+
+    # Upsert customer (Zalo may not provide profile in webhook, so we'll fetch if needed)
+    customer_id = f"zalo:{customer_platform_id}"
+    customer_doc = customer_model.upsert_customer(
+        platform='zalo',
+        platform_specific_id=customer_platform_id,
+    )
+
+    # Upsert conversation
+    conversation_doc = conversation_model.upsert_conversation(
+        oa_id=integration.get('oa_id'),
+        customer_id=customer_id,
+        last_message_text=message,
+        last_message_created_at=datetime.utcnow(),
+        direction=direction,
+        increment_unread=(direction == 'in'),
+    )
+    
+    conversation_id = conversation_doc.get('_id')
+
+    # Persist message (dedupe outgoing echoes)
+    deduped = False
+    try:
+        message_doc = None
+        if direction == 'out':
+            existing = message_model.find_recent_similar(platform='zalo', oa_id=integration.get('oa_id'), sender_id=customer_platform_id, conversation_id=conversation_id, direction='out', text=message, within_seconds=10)
+            if existing:
+                message_doc = existing
+                deduped = True
+                logger.info('Duplicate outgoing echo from Zalo detected; using existing message doc')
+            else:
+                message_doc = message_model.add_message(
+                    platform='zalo',
+                    oa_id=integration.get('oa_id'),
+                    sender_id=customer_platform_id,
+                    direction=direction,
+                    text=message,
+                    metadata=data,
+                    is_read=True,
+                    conversation_id=conversation_id,
+                )
+        else:
+            message_doc = message_model.add_message(
+                platform='zalo',
+                oa_id=integration.get('oa_id'),
+                sender_id=customer_platform_id,
+                direction=direction,
+                text=message,
+                metadata=data,
+                is_read=False,
+                conversation_id=conversation_id,
+            )
+    except Exception as e:
+        logger.error(f"Failed to persist Zalo message: {e}")
+        message_doc = None
+
+    # Build conversation ID for frontend (legacy format)
+    conv_id = f"zalo:{integration.get('oa_id')}:{customer_platform_id}"
+
+    # Emit socket events
     payload = {
         'platform': 'zalo',
         'oa_id': integration.get('oa_id'),
-        'sender_id': sender_id,
+        'sender_id': customer_platform_id,
         'message': message,
-        'received_at': datetime.utcnow().isoformat(),
+        'message_doc': message_doc,
+        'conv_id': conv_id,
+        'conversation_id': conversation_id,
+        'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
+        'direction': direction,
     }
 
     try:
         socketio = getattr(current_app, 'socketio', None)
         if socketio:
-            socketio.emit('new-message', payload, broadcast=True)
+            if not deduped:
+                try:
+                    socketio.emit('new-message', payload, broadcast=True)
+                    logger.info('Emitted new-message via socket')
+                except TypeError:
+                    socketio.emit('new-message', payload)
+                    logger.info('Emitted new-message via socket (fallback)')
+
+                # Emit conversation update
+                try:
+                    socketio.emit('update-conversation', {
+                        'conversation_id': conversation_id,
+                        'conv_id': conv_id,
+                        'oa_id': integration.get('oa_id'),
+                        'customer_id': customer_id,
+                        'last_message': {
+                            'text': message,
+                            'created_at': datetime.utcnow().isoformat() + 'Z',
+                        },
+                        'unread_count': conversation_doc.get('unread_count', 0),
+                        'customer_info': conversation_doc.get('customer_info', {}),
+                        'platform': 'zalo',
+                    }, broadcast=True)
+                    logger.info('Emitted update-conversation via socket')
+                except TypeError:
+                    socketio.emit('update-conversation', {
+                        'conversation_id': conversation_id,
+                        'conv_id': conv_id,
+                        'oa_id': integration.get('oa_id'),
+                        'customer_id': customer_id,
+                        'last_message': {
+                            'text': message,
+                            'created_at': datetime.utcnow().isoformat() + 'Z',
+                        },
+                        'unread_count': conversation_doc.get('unread_count', 0),
+                        'customer_info': conversation_doc.get('customer_info', {}),
+                        'platform': 'zalo',
+                    })
+            else:
+                logger.info('Deduped outgoing echo; skipping socket emits')
         else:
             logger.info('SocketIO not initialized; skipping emit')
     except Exception as e:
         logger.error(f"Failed to emit socket event: {e}")
-
-    # AI processing: generate reply
-    try:
-        reply_text = generate_reply(integration.get('accountId'), message or '')
-    except Exception as e:
-        logger.error(f"AI generation failed: {e}")
-        reply_text = "(AI error) Sorry, I couldn't process that."
-
-    # Send reply to Zalo using stored access token
-    access_token = integration.get('access_token')
-    try:
-        send_resp = _send_message_to_zalo(access_token, sender_id, reply_text)
-        logger.info(f"Send message result: {send_resp}")
-    except Exception as e:
-        logger.error(f"Failed to send message to Zalo: {e}")
 
     return jsonify({'success': True}), 200
 

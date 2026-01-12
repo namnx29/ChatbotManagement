@@ -18,7 +18,24 @@ def list_integrations():
     chatbot_id = request.args.get('chatbotId') or request.args.get('chatbot_id')
     model = IntegrationModel(current_app.mongo_client)
     items = model.find_by_account(account_id, platform=platform, chatbot_id=chatbot_id)
-    return jsonify({'success': True, 'data': items}), 200
+    
+    # Ensure all items have required fields for frontend
+    # Frontend expects: oa_id, name, avatar_url (or avatar)
+    enriched_items = []
+    for item in items:
+        enriched = dict(item)
+        # Ensure oa_id is present
+        if 'oa_id' not in enriched:
+            enriched['oa_id'] = enriched.get('_id') or None
+        # Ensure name is present (use oa_name as fallback)
+        if not enriched.get('name') and enriched.get('oa_name'):
+            enriched['name'] = enriched.get('oa_name')
+        # Ensure avatar_url is present (use avatar as fallback)
+        if not enriched.get('avatar_url') and enriched.get('avatar'):
+            enriched['avatar_url'] = enriched.get('avatar')
+        enriched_items.append(enriched)
+    
+    return jsonify({'success': True, 'data': enriched_items}), 200
 
 
 @integrations_bp.route('/<integration_id>/activate', methods=['POST'])

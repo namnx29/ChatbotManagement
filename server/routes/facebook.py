@@ -1,18 +1,39 @@
 from flask import Blueprint, request, jsonify, current_app
 from models.integration import IntegrationModel
 from utils.redis_client import set_key, get_key, del_key
-from utils.ai_service import generate_reply
 from config import Config
 import logging
 import secrets
 import requests
 import json
 from datetime import datetime, timedelta
+import base64
+from io import BytesIO
 
 facebook_bp = Blueprint('facebook', __name__)
 logger = logging.getLogger(__name__)
 
 PKCE_TTL = 600  # seconds (we reuse state storage for flow)
+
+
+def _emit_socket(event, payload):
+    """Emit a socket event in a backwards-compatible way.
+    Some server instances accept `broadcast=True`, others (raw python-socketio Server)
+    don't. Try with `broadcast=True` first and fall back to a plain emit.
+    """
+    try:
+        socketio = getattr(current_app, 'socketio', None)
+        if not socketio:
+            return False
+        try:
+            socketio.emit(event, payload, broadcast=True)
+        except TypeError:
+            # fall back for servers that don't accept broadcast kw
+            socketio.emit(event, payload)
+        return True
+    except Exception as e:
+        logger.error(f"Socket emit failed: {e}")
+        return False
 
 from utils.request_helpers import get_account_id_from_request as _get_account_id_from_request
 
@@ -319,72 +340,671 @@ def webhook_event():
     entries = data.get('entry') or []
 
     integration_model = IntegrationModel(current_app.mongo_client)
+    from models.customer import CustomerModel
+    from models.conversation import ConversationModel
+    from models.message import MessageModel
+    
+    customer_model = CustomerModel(current_app.mongo_client)
+    conversation_model = ConversationModel(current_app.mongo_client)
+    message_model = MessageModel(current_app.mongo_client)
 
     for entry in entries:
         page_id = entry.get('id')
         # messaging events
         for messaging in entry.get('messaging', []) or entry.get('messaging', []):
+            # Skip non-message events (read receipts, delivery receipts, etc.)
+            if 'message' not in messaging and 'postback' not in messaging:
+                logger.debug(f"Skipping non-message event: {list(messaging.keys())}")
+                continue
+            
             sender_id = (messaging.get('sender') or {}).get('id')
+            recipient_id = (messaging.get('recipient') or {}).get('id')
             message_text = None
+            
+            # Check if this is an echo (message sent by the page itself)
+            is_echo = messaging.get('message', {}).get('is_echo', False)
+            
+            # CRITICAL FIX: If sender_id == page_id (echo), the customer is recipient_id
+            # Otherwise, customer is sender_id
+            if is_echo or sender_id == page_id:
+                # This is an echo - the page sent a message, so customer is the recipient
+                customer_platform_id = recipient_id
+                direction = 'out'  # Outgoing from page perspective
+                oa_id = page_id
+            else:
+                # Normal incoming message from customer
+                customer_platform_id = sender_id
+                direction = 'in'
+                oa_id = page_id
+            
             # message text
             if messaging.get('message'):
                 message_text = messaging['message'].get('text') or messaging['message'].get('sticker_id') or None
+            else:
+                # No message field - skip this event (read receipt, delivery receipt, etc.)
+                continue
 
             integration = None
-            if page_id:
-                integration = integration_model.find_by_platform_and_oa('facebook', page_id)
+            if oa_id:
+                integration = integration_model.find_by_platform_and_oa('facebook', oa_id)
 
             if not integration or not integration.get('is_active'):
                 logger.info('Facebook integration not found or inactive; ignoring message')
                 continue
 
+            # Skip if no customer identified
+            if not customer_platform_id:
+                logger.warning('No customer identified in webhook message')
+                continue
+
+            # Upsert customer
+            sender_profile = None
+            try:
+                page_token = integration.get('access_token')
+                if page_token and customer_platform_id:
+                    try:
+                        resp = requests.get(f"{Config.FB_API_BASE}/{customer_platform_id}", params={'fields': 'name,picture{url}', 'access_token': page_token}, timeout=5)
+                        if resp.status_code == 200:
+                            d = resp.json() or {}
+                            name = d.get('name')
+                            pic = d.get('picture') or {}
+                            avatar = None
+                            if isinstance(pic, dict):
+                                if isinstance(pic.get('data'), dict):
+                                    avatar = pic['data'].get('url')
+                                else:
+                                    avatar = pic.get('url')
+                            if name or avatar:
+                                sender_profile = {'name': name, 'avatar': avatar}
+                    except Exception as e:
+                        logger.info(f"Failed to fetch sender profile for {customer_platform_id}: {e}")
+            except Exception:
+                sender_profile = None
+
+            # Upsert customer
+            customer_id = f"facebook:{customer_platform_id}"
+            customer_doc = customer_model.upsert_customer(
+                platform='facebook',
+                platform_specific_id=customer_platform_id,
+                name=sender_profile.get('name') if sender_profile else None,
+                avatar=sender_profile.get('avatar') if sender_profile else None,
+            )
+
+            # Upsert conversation and get conversation_id
+            # Only update last_message_text if we have actual text
+            # For attachment-only messages, we still want to update the conversation timestamp
+            conversation_doc = conversation_model.upsert_conversation(
+                oa_id=integration.get('oa_id'),
+                customer_id=customer_id,
+                last_message_text=message_text,  # Can be None for attachment-only messages
+                last_message_created_at=datetime.utcnow() if message_text else None,
+                direction=direction,
+                customer_info={
+                    'name': sender_profile.get('name') if sender_profile else None,
+                    'avatar': sender_profile.get('avatar') if sender_profile else None,
+                },
+                increment_unread=(direction == 'in'),  # Increment for any incoming message
+            )
+            
+            conversation_id = conversation_doc.get('_id')
+            # Ensure conversation_id is a string for JSON serialization
+            if conversation_id and not isinstance(conversation_id, str):
+                try:
+                    conversation_id = str(conversation_id)
+                except Exception:
+                    conversation_id = None
+
+            # Persist message (dedupe outgoing echoes)
+            deduped = False
+            try:
+                incoming_doc = None
+                if direction == 'out':
+                    # Check for recent similar outgoing message to avoid duplicate from send API + webhook echo
+                    existing = message_model.find_recent_similar(platform='facebook', oa_id=integration.get('oa_id'), sender_id=customer_platform_id, conversation_id=conversation_id, direction='out', text=message_text, within_seconds=10)
+                    if existing:
+                        incoming_doc = existing
+                        deduped = True
+                        logger.info('Duplicate outgoing echo detected; using existing message doc')
+                    else:
+                        incoming_doc = message_model.add_message(
+                            platform='facebook',
+                            oa_id=integration.get('oa_id'),
+                            sender_id=customer_platform_id,
+                            direction='out',
+                            text=message_text,
+                            metadata=messaging.get('message'),
+                            sender_profile=sender_profile,
+                            is_read=True,
+                            conversation_id=conversation_id,
+                        )
+                else:
+                    incoming_doc = message_model.add_message(
+                        platform='facebook',
+                        oa_id=integration.get('oa_id'),
+                        sender_id=customer_platform_id,
+                        direction=direction,
+                        text=message_text,
+                        metadata=messaging.get('message'),
+                        sender_profile=sender_profile,
+                        is_read=False,
+                        conversation_id=conversation_id,
+                    )
+            except Exception as e:
+                logger.error(f"Failed to persist message: {e}")
+                incoming_doc = None
+
+            # Build conversation ID for frontend (legacy format for compatibility)
+            conv_id = f"facebook:{integration.get('oa_id')}:{customer_platform_id}"
+
+            # Emit socket events
             payload = {
                 'platform': 'facebook',
                 'oa_id': integration.get('oa_id'),
-                'sender_id': sender_id,
+                'sender_id': customer_platform_id,
                 'message': message_text,
-                'received_at': datetime.utcnow().isoformat(),
+                'message_doc': incoming_doc,
+                'conv_id': conv_id,
+                'conversation_id': conversation_id,  # New field (already string)
+                'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
+                'direction': direction,
+                'sender_profile': sender_profile,
             }
-
+            
+            # Emit new message event (unless deduped by outgoing echo)
             try:
-                socketio = getattr(current_app, 'socketio', None)
-                if socketio:
-                    socketio.emit('new-message', payload, broadcast=True)
+                if not deduped:
+                    _emit_socket('new-message', payload)
+                    logger.info('Emitted new-message via socket')
             except Exception as e:
-                logger.error(f"Failed to emit socket event: {e}")
-
+                logger.error(f'Failed to emit new-message via socket: {e}')
+            
+            # Emit conversation update event (for sidebar refresh)
             try:
-                reply_text = generate_reply(integration.get('accountId'), message_text or '')
-            except Exception as e:
-                logger.error(f"AI generation failed: {e}")
-                reply_text = "(AI error) Sorry, I couldn't process that."
-
-            try:
-                send_resp = _send_message_to_facebook(integration.get('access_token'), sender_id, reply_text)
-                logger.info(f"Send message result: {send_resp}")
-            except Exception as e:
-                logger.error(f"Failed to send message to Facebook: {e}")
+                if not deduped:
+                    _emit_socket('update-conversation', {
+                        'conversation_id': conversation_id,  # Already string
+                        'conv_id': conv_id,  # Legacy format
+                        'oa_id': integration.get('oa_id'),
+                        'customer_id': customer_id,
+                        'last_message': {
+                            'text': message_text,
+                            'created_at': datetime.utcnow().isoformat() + 'Z',
+                        },
+                        'unread_count': conversation_doc.get('unread_count', 0),
+                        'customer_info': conversation_doc.get('customer_info', {}),
+                        'platform': 'facebook',
+                    })
+                    logger.info('Emitted update-conversation via socket')
+            except Exception:
+                logger.error('Failed to emit update-conversation via socket')
 
     return jsonify({'success': True}), 200
 
 
-def _send_message_to_facebook(page_access_token, recipient_id, message_text):
+@facebook_bp.route('/api/facebook/conversations', methods=['GET'])
+def list_conversations():
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    oa_id = request.args.get('oa_id') or (request.get_json(silent=True) or {}).get('oa_id')
+    if not oa_id:
+        return jsonify({'success': False, 'message': 'oa_id is required'}), 400
+
+    try:
+        from models.conversation import ConversationModel
+        from models.customer import CustomerModel
+        
+        conversation_model = ConversationModel(current_app.mongo_client)
+        customer_model = CustomerModel(current_app.mongo_client)
+        
+        # Get conversations from new structure
+        convs = conversation_model.find_by_oa(oa_id, limit=100)
+        logger.info(f"Found {len(convs)} conversations from new structure for oa_id {oa_id}")
+        if len(convs) == 0:
+            # Try legacy method as fallback
+            logger.info(f"No conversations in new structure, trying legacy method")
+            from models.message import MessageModel
+            message_model = MessageModel(current_app.mongo_client)
+            convs_legacy = message_model.get_conversations_for_oa('facebook', oa_id)
+            logger.info(f"Found {len(convs_legacy)} conversations from legacy structure")
+            # Convert legacy format to new format
+            convs = []
+            for c in convs_legacy:
+                sender_id = c.get('sender_id')
+                sp = c.get('sender_profile') or {}
+                name = sp.get('name') or f'User {sender_id}'
+                avatar = sp.get('avatar') or None
+                convs.append({
+                    'id': f"facebook:{oa_id}:{sender_id}",
+                    'platform': 'facebook',
+                    'oa_id': oa_id,
+                    'sender_id': sender_id,
+                    'name': name,
+                    'avatar': avatar,
+                    'lastMessage': c.get('lastMessage'),
+                    'time': c.get('time'),
+                    'unreadCount': c.get('unreadCount'),
+                })
+    except Exception as e:
+        logger.error(f"Failed to fetch conversations from new structure: {e}", exc_info=True)
+        # Fallback to legacy method
+        try:
+            from models.message import MessageModel
+            message_model = MessageModel(current_app.mongo_client)
+            convs_legacy = message_model.get_conversations_for_oa('facebook', oa_id)
+            logger.info(f"Found {len(convs_legacy)} conversations from legacy structure")
+            # Convert legacy format to new format
+            convs = []
+            for c in convs_legacy:
+                sender_id = c.get('sender_id')
+                sp = c.get('sender_profile') or {}
+                name = sp.get('name') or f'User {sender_id}'
+                avatar = sp.get('avatar') or None
+                convs.append({
+                    'id': f"facebook:{oa_id}:{sender_id}",
+                    'platform': 'facebook',
+                    'oa_id': oa_id,
+                    'sender_id': sender_id,
+                    'name': name,
+                    'avatar': avatar,
+                    'lastMessage': c.get('lastMessage'),
+                    'time': c.get('time'),
+                    'unreadCount': c.get('unreadCount'),
+                })
+        except Exception as e2:
+            logger.error(f"Legacy fallback also failed: {e2}", exc_info=True)
+            return jsonify({'success': False, 'message': 'Internal error fetching conversations'}), 500
+
+    # Enrich with integration profile when possible
+    try:
+        model = IntegrationModel(current_app.mongo_client)
+        integration = model.find_by_platform_and_oa('facebook', oa_id)
+        page_name = integration.get('name') if integration else None
+        avatar_url = integration.get('avatar_url') if integration else None
+    except Exception:
+        page_name = None
+        avatar_url = None
+
+    out = []
+    for c in convs:
+        # If using new structure, extract data from conversation document
+        if 'customer_id' in c:
+            customer_id = c.get('customer_id')
+            # Extract platform_specific_id from customer_id (format: "facebook:123456")
+            parts = customer_id.split(':', 1)
+            sender_id = parts[1] if len(parts) > 1 else customer_id
+            
+            # Get customer info from denormalized data or fetch from customer collection
+            customer_info = c.get('customer_info') or {}
+            name = customer_info.get('name') or f'User {sender_id}'
+            avatar = customer_info.get('avatar')
+            
+            # Build legacy conversation ID
+            conv_id = f"facebook:{oa_id}:{sender_id}"
+            
+            last_msg = c.get('last_message') or {}
+            # Format time for frontend (convert ISO string to readable format if needed)
+            time_value = last_msg.get('created_at')
+            if time_value:
+                try:
+                    # If it's already a string, try to parse and format
+                    if isinstance(time_value, str):
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(time_value.replace('Z', '+00:00'))
+                        time_value = dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    pass  # Keep original value if parsing fails
+            
+            # Ensure conversation_id is a string
+            conv_id_obj = c.get('_id')
+            if conv_id_obj and not isinstance(conv_id_obj, str):
+                conv_id_obj = str(conv_id_obj)
+            
+            out.append({
+                'id': conv_id,
+                'conversation_id': conv_id_obj,  # New field (string)
+                'platform': 'facebook',
+                'oa_id': oa_id,
+                'sender_id': sender_id,
+                'name': name,
+                'avatar': avatar,
+                'lastMessage': last_msg.get('text'),
+                'time': time_value or c.get('updated_at'),  # Fallback to updated_at if no last_message time
+                'unreadCount': c.get('unread_count', 0),
+            })
+        else:
+            # Legacy format (already converted above)
+            out.append(c)
+    
+    logger.info(f"Returning {len(out)} conversations for oa_id {oa_id}")
+    if len(out) == 0:
+        logger.warning(f"No conversations found for oa_id {oa_id}. Check if conversations exist in DB.")
+
+    return jsonify({'success': True, 'data': out, 'page': {'name': page_name, 'avatar': avatar_url}}), 200
+
+
+@facebook_bp.route('/api/facebook/conversations/<path:conv_id>/messages', methods=['GET'])
+def get_conversation_messages(conv_id):
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'facebook':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    limit = request.args.get('limit', 100)
+    skip = request.args.get('skip', 0)
+
+    try:
+        from models.conversation import ConversationModel
+        from models.message import MessageModel
+        
+        conversation_model = ConversationModel(current_app.mongo_client)
+        message_model = MessageModel(current_app.mongo_client)
+        
+        # Try to find conversation to get conversation_id
+        customer_id = f"facebook:{sender_id}"
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        conversation_id = conversation_doc.get('_id') if conversation_doc else None
+        
+        # Ensure conversation_id is a string if it exists
+        if conversation_id and not isinstance(conversation_id, str):
+            try:
+                conversation_id = str(conversation_id)
+            except Exception:
+                conversation_id = None
+        
+        # Get messages using conversation_id if available, otherwise fallback to legacy
+        msgs = message_model.get_messages(
+            platform, oa_id, sender_id, 
+            limit=limit, skip=skip, 
+            conversation_id=conversation_id
+        )
+        logger.info(f"Retrieved {len(msgs)} messages for conversation {conv_id}")
+    except Exception as e:
+        logger.error(f"Failed to fetch messages: {e}")
+        return jsonify({'success': False, 'message': 'Internal error fetching messages'}), 500
+
+    # Defensive: ensure messages are JSON-serializable before returning
+    try:
+        return jsonify({'success': True, 'data': msgs}), 200
+    except TypeError as e:
+        logger.warning(f"Messages not JSON serializable, attempting to normalize: {e}")
+        try:
+            import json
+            safe_msgs = json.loads(json.dumps(msgs, default=str))
+            return jsonify({'success': True, 'data': safe_msgs}), 200
+        except Exception as e2:
+            logger.error(f"Failed to normalize messages for JSON response: {e2}")
+            return jsonify({'success': False, 'message': 'Internal error formatting messages'}), 500
+
+
+@facebook_bp.route('/api/facebook/conversations/<path:conv_id>/mark-read', methods=['POST'])
+def mark_conversation_read(conv_id):
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'facebook':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    # Verify integration ownership
+    model = IntegrationModel(current_app.mongo_client)
+    integration = model.find_by_platform_and_oa(platform, oa_id)
+    if not integration or integration.get('accountId') != account_id:
+        return jsonify({'success': False, 'message': 'Not authorized or integration not found'}), 403
+
+    try:
+        from models.conversation import ConversationModel
+        from models.message import MessageModel
+        
+        conversation_model = ConversationModel(current_app.mongo_client)
+        message_model = MessageModel(current_app.mongo_client)
+        
+        customer_id = f"facebook:{sender_id}"
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        conversation_id = conversation_doc.get('_id') if conversation_doc else None
+        
+        # Mark conversation as read in conversations collection
+        if conversation_doc:
+            conversation_model.mark_read(oa_id, customer_id)
+        
+        # Mark messages as read
+        modified = message_model.mark_read(platform, oa_id, sender_id, conversation_id=conversation_id)
+        return jsonify({'success': True, 'updated': modified}), 200
+    except Exception as e:
+        logger.error(f"Failed to mark conversation read: {e}")
+        return jsonify({'success': False, 'message': 'Internal error'}), 500
+
+
+@facebook_bp.route('/api/facebook/conversations/<path:conv_id>/messages', methods=['POST'])
+def send_conversation_message(conv_id):
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'facebook':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    data = request.get_json() or {}
+    text = data.get('text')
+    image = data.get('image')  # Optional: data URL or remote URL
+    if not text and not image:
+        return jsonify({'success': False, 'message': 'text or image is required'}), 400
+
+    # Verify integration ownership
+    model = IntegrationModel(current_app.mongo_client)
+    integration = model.find_by_platform_and_oa(platform, oa_id)
+    if not integration or integration.get('accountId') != account_id:
+        return jsonify({'success': False, 'message': 'Not authorized or integration not found'}), 403
+
+    try:
+        from models.customer import CustomerModel
+        from models.conversation import ConversationModel
+        from models.message import MessageModel
+        
+        customer_model = CustomerModel(current_app.mongo_client)
+        conversation_model = ConversationModel(current_app.mongo_client)
+        message_model = MessageModel(current_app.mongo_client)
+        
+        # Get or create customer
+        customer_id = f"facebook:{sender_id}"
+        customer_doc = customer_model.find_by_id(customer_id)
+        if not customer_doc:
+            # Create customer if doesn't exist
+            customer_doc = customer_model.upsert_customer(
+                platform='facebook',
+                platform_specific_id=sender_id,
+            )
+        
+        # Get or create conversation
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        if not conversation_doc:
+            conversation_doc = conversation_model.upsert_conversation(
+                oa_id=oa_id,
+                customer_id=customer_id,
+            )
+        
+        conversation_id = conversation_doc.get('_id')
+        # Ensure conversation_id is a string for JSON serialization
+        if conversation_id and not isinstance(conversation_id, str):
+            try:
+                conversation_id = str(conversation_id)
+            except Exception:
+                conversation_id = None
+        
+        # Build conversation ID for frontend (legacy format)
+        conv_id = f"{platform}:{oa_id}:{sender_id}"
+        
+        # send to facebook (for images, _send_message_to_facebook may accept image param)
+        send_resp = _send_message_to_facebook(integration.get('access_token'), sender_id, text, image)
+        
+        
+        # Update conversation with last message
+        conversation_model.upsert_conversation(
+            oa_id=oa_id,
+            customer_id=customer_id,
+            last_message_text=text if text else ("Image" if image else None),
+            last_message_created_at=datetime.utcnow(),
+            direction='out',
+        )
+        
+        # persist outgoing message
+        page_profile = {'name': integration.get('name'), 'avatar': integration.get('avatar_url')}
+        metadata = {'send_response': send_resp, 'page_profile': page_profile}
+        if image:
+            metadata['image'] = image
+        sent_doc = message_model.add_message(
+            platform=platform, 
+            oa_id=oa_id, 
+            sender_id=sender_id, 
+            direction='out', 
+            text=text, 
+            metadata=metadata, 
+            is_read=True,
+            conversation_id=conversation_id,
+        )
+        
+        # Build recipient_profile from customer_doc if available
+        recipient_profile = {'name': customer_doc.get('name') if customer_doc else None, 'avatar': customer_doc.get('avatar') if customer_doc else None}
+
+        # emit to socket listeners
+        try:
+            _emit_socket('new-message', {
+                'platform': platform,
+                'oa_id': oa_id,
+                'sender_id': sender_id,
+                'message': text if text else ("Image" if image else None),
+                'message_doc': sent_doc,
+                'conv_id': f"{platform}:{oa_id}:{sender_id}",
+                'conversation_id': conversation_id,  # Already string
+                'direction': 'out',
+                'sent_at': datetime.utcnow().isoformat() + 'Z',
+                'sender_profile': page_profile,
+                'recipient_profile': recipient_profile,
+            })
+            
+            # Emit conversation update
+            _emit_socket('update-conversation', {
+                'conversation_id': conversation_id,  # Already string
+                'conv_id': conv_id,
+                'oa_id': oa_id,
+                'customer_id': customer_id,
+                'last_message': {
+                    'text': text,
+                    'created_at': datetime.utcnow().isoformat() + 'Z',
+                },
+                'unread_count': conversation_doc.get('unread_count', 0),
+                'customer_info': conversation_doc.get('customer_info', {}),
+                'platform': 'facebook',
+            })
+        except Exception as e:
+            logger.error(f"Failed to emit socket event for outgoing message: {e}")
+        return jsonify({'success': True, 'data': {'sent': sent_doc, 'send_response': send_resp}}), 200
+    except Exception as e:
+        logger.error(f"Failed to send conversation message: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Failed to send message: {str(e)}'}), 500
+
+
+def _send_message_to_facebook(page_access_token, recipient_id, message_text=None, image_data=None):
     if not page_access_token or str(page_access_token).startswith('mock'):
-        logger.info(f"Mock send to facebook: to={recipient_id}, message={message_text}")
+        logger.info(f"Mock send to facebook: to={recipient_id}, message={message_text}, image={'yes' if image_data else 'no'}")
         return {'status': 'mocked'}
 
     url = f"{Config.FB_API_BASE}/{Config.FB_API_VERSION}/me/messages"
     params = {'access_token': page_access_token}
-    body = {
-        'recipient': {'id': recipient_id},
-        'message': {'text': message_text}
-    }
+
+    if image_data:
+        # Check if image_data is a data URL (base64)
+        if image_data.startswith('data:image'):
+            # Extract base64 data
+            try:
+                header, encoded = image_data.split(',', 1)
+                image_bytes = base64.b64decode(encoded)
+                
+                # Upload to Facebook first to get a URL
+                # Use Facebook's attachment upload API
+                upload_url = f"{Config.FB_API_BASE}/{Config.FB_API_VERSION}/me/message_attachments"
+                files = {
+                    'filedata': ('image.jpg', BytesIO(image_bytes), 'image/jpeg')
+                }
+                upload_params = {
+                    'access_token': page_access_token,
+                    'message': json.dumps({
+                        'attachment': {
+                            'type': 'image',
+                            'payload': {
+                                'is_reusable': True
+                            }
+                        }
+                    })
+                }
+                
+                upload_resp = requests.post(upload_url, params=upload_params, files=files, timeout=30)
+                upload_data = upload_resp.json()
+                
+                if 'attachment_id' in upload_data:
+                    # Use the attachment ID
+                    body = {
+                        'recipient': {'id': recipient_id},
+                        'message': {
+                            'attachment': {
+                                'type': 'image',
+                                'payload': {
+                                    'attachment_id': upload_data['attachment_id']
+                                }
+                            }
+                        }
+                    }
+                else:
+                    raise Exception(f"Upload failed: {upload_data}")
+            except Exception as e:
+                logger.error(f"Failed to process image data: {e}")
+                return {'error': str(e)}
+        else:
+            # It's already a URL
+            body = {
+                'recipient': {'id': recipient_id},
+                'message': {
+                    'attachment': {
+                        'type': 'image',
+                        'payload': {
+                            'url': image_data,
+                            'is_reusable': True
+                        }
+                    }
+                }
+            }
+        
+        # Add text if provided
+        if message_text:
+            # Send text first, then image (Facebook doesn't support both in one message)
+            text_body = {
+                'recipient': {'id': recipient_id},
+                'message': {'text': message_text}
+            }
+            requests.post(url, params=params, json=text_body, timeout=10)
+    else:
+        body = {
+            'recipient': {'id': recipient_id},
+            'message': {'text': message_text}
+        }
+
     resp = requests.post(url, params=params, json=body, timeout=10)
     try:
         return resp.json()
     except Exception:
         return {'status_code': resp.status_code, 'text': resp.text}
-
+    
 
 # Token refresh helper (attempts to refresh long-lived tokens)
 def refresh_expiring_tokens(mongo_client):

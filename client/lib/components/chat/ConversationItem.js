@@ -2,6 +2,7 @@
 
 import { Avatar, Dropdown } from 'antd';
 import { MoreOutlined, TagFilled } from '@ant-design/icons';
+import { useState, useEffect } from 'react';
 
 const platformIcons = {
 	facebook: (
@@ -34,7 +35,57 @@ const tagColors = {
 	interacting: '#fa8c16',
 };
 
+function parseToDate(s) {
+	if (!s) return null;
+	if (s instanceof Date) return s;
+	if (typeof s === 'number') return new Date(s);
+	let str = String(s);
+	// If string looks like 'YYYY-MM-DD HH:MM:SS', convert to ISO and assume UTC
+	if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(str)) {
+		str = str.replace(' ', 'T') + 'Z';
+	}
+	// If looks like 'YYYY-MM-DD', make it start of day UTC
+	if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+		str = str + 'T00:00:00Z';
+	}
+	const d = new Date(str);
+	if (isNaN(d.getTime())) return null;
+	return d;
+}
+
+function formatRelativeTime(time) {
+	const d = parseToDate(time);
+	if (!d) return '';
+	const now = new Date();
+	const diff = Math.floor((now.getTime() - d.getTime()) / 1000);
+
+	if (diff < 10) return 'Vừa xong';
+	if (diff < 60) return `${diff} giây`;
+
+	const mins = Math.floor(diff / 60);
+	if (mins < 60) return `${mins} phút`;
+	const hrs = Math.floor(mins / 60);
+	if (hrs < 24) return `${hrs} giờ`;
+	const days = Math.floor(hrs / 24);
+	if (days === 1) return 'Hôm qua';
+	if (days < 7) return `${days} ngày`;
+	// older: show date (local)
+	return d.toLocaleDateString();
+}
+
 export default function ConversationItem({ conversation, isSelected, onClick, isUnread }) {
+	const [relativeTime, setRelativeTime] = useState(formatRelativeTime(conversation.time));
+
+	useEffect(() => {
+		setRelativeTime(formatRelativeTime(conversation.time));
+
+		const timer = setInterval(() => {
+			setRelativeTime(formatRelativeTime(conversation.time));
+		}, 60000);
+
+		return () => clearInterval(timer);
+	}, [conversation.time]);
+
 	const menuItems = [
 		{ key: 'mark-read', label: 'Đánh dấu đã đọc' },
 		{ key: 'archive', label: 'Lưu trữ' },
@@ -131,14 +182,14 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 									fontSize: '13px',
 									color: '#000000ff',
 									overflow: 'hidden',
-									width: '220px',
+									width: '200px',
 									textOverflow: 'ellipsis',
 									whiteSpace: 'nowrap',
 									fontWeight: isUnread ? '700' : '400',
 									marginBottom: '4px',
 								}}
 							>
-								{conversation.lastMessage}
+								{conversation.lastMessage || 'Tệp đính kèm'}
 							</div>
 						</div>
 						<span
@@ -148,7 +199,7 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 								fontWeight: isUnread ? '700' : '400',
 							}}
 						>
-							{conversation.time}
+							{relativeTime}
 						</span>
 					</div>
 

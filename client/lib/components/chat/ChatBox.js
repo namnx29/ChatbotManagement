@@ -1,6 +1,6 @@
 'use client';
 
-import { Avatar, Input, Button, Switch } from 'antd';
+import { Avatar, Input, Button, Switch, Image } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
@@ -32,10 +32,10 @@ export default function ChatBox({ conversation, onSendMessage }) {
 	const messagesEndRef = useRef(null);
 	const fileInputRef = useRef(null);
 
-	// Keep local messages in sync when conversation changes
+	// Keep local messages in sync when conversation changes or when messages array updates
 	useEffect(() => {
 		setMessages(conversation?.messages || []);
-	}, [conversation?.id]);
+	}, [conversation]);
 
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -56,9 +56,8 @@ export default function ChatBox({ conversation, onSendMessage }) {
 					minute: '2-digit',
 				}),
 			};
-			setMessages((prev) => [...prev, newMessage]);
 			setMessage('');
-			// inform parent so it can persist the message
+			// inform parent so it can persist the message (parent will update conversation prop)
 			if (typeof onSendMessage === 'function') {
 				onSendMessage(newMessage);
 			}
@@ -79,7 +78,6 @@ export default function ChatBox({ conversation, onSendMessage }) {
 						minute: '2-digit',
 					}),
 				};
-				setMessages((prev) => [...prev, newMessage]);
 				if (typeof onSendMessage === 'function') {
 					onSendMessage(newMessage);
 				}
@@ -173,9 +171,9 @@ export default function ChatBox({ conversation, onSendMessage }) {
 							gap: '8px',
 						}}
 					>
-						{msg.sender === 'bot' && (
-							<Avatar size={32} src={conversation.avatar}>
-								{conversation.name[0]}
+						{msg.sender === 'customer' && (
+							<Avatar size={32} src={msg.avatar || conversation.avatar}>
+								{(msg.name || conversation.name || 'U')[0]}
 							</Avatar>
 						)}
 						<div
@@ -187,15 +185,28 @@ export default function ChatBox({ conversation, onSendMessage }) {
 							}}
 						>
 							{msg.image ? (
-								<img
-									src={msg.image}
-									alt="Sent"
-									style={{
-										maxWidth: '100%',
-										borderRadius: '12px',
-										marginBottom: '4px',
-									}}
-								/>
+								<div style={{
+									maxWidth: '300px',
+									maxHeight: '300px',
+									overflow: 'hidden',
+									borderRadius: '12px',
+									marginBottom: '4px',
+									border: '1px solid #f0f0f0'
+								}}>
+									<Image
+										src={msg.image}
+										alt="Sent"
+										style={{
+											width: '100%',
+											height: '100%',
+											objectFit: 'cover',
+											cursor: 'pointer'
+										}}
+										preview={{
+											cover: <div style={{ fontSize: '12px' }}>Click to view</div>
+										}}
+									/>
+								</div>
 							) : (
 								<div
 									style={{

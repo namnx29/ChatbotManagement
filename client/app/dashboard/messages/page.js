@@ -352,8 +352,14 @@ export default function ChatManagementPage() {
         const conversationArrays = await Promise.all(conversationPromises);
         const allConversations = conversationArrays.flat();
 
+        const sortedConversations = allConversations.sort((a, b) => {
+          const timeA = a.time ? new Date(a.time).getTime() : 0;
+          const timeB = b.time ? new Date(b.time).getTime() : 0;
+          return timeB - timeA;
+        });
+
         if (mounted) {
-          setConversations(allConversations);
+          setConversations(sortedConversations);
         }
       } catch (error) {
         console.error('Failed to load integrations:', error);
@@ -494,7 +500,6 @@ export default function ChatManagementPage() {
         }
       }
 
-      // After successful send, mark conversation as read in UI and on the server
       try {
         updateConversationInList(selectedChat.id, { isUnread: false });
         if (selectedChat.platform === 'zalo') {
@@ -528,7 +533,7 @@ export default function ChatManagementPage() {
 
         // Notify user
         try {
-          message.error((error && (error.body && error.body.message)) || error.message || 'Hình ảnh vượt quá kích thước cho phép (1MB)');
+          message.error('Hình ảnh vượt quá kích thước cho phép (1MB)');
         } catch (e) {
           console.error('Failed to show message notification:', e);
         }

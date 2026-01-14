@@ -10,7 +10,7 @@ import {
 	InstagramFilled,
 	TagFilled
 } from '@ant-design/icons';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 const platformIcons = {
 	facebook: <FacebookFilled style={{ fontSize: '14px', color: '#1877f2' }} />,
@@ -25,25 +25,83 @@ const tagColors = {
 	interacting: '#fa8c16',
 };
 
-export default function ChatBox({ conversation, onSendMessage }) {
+export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 	const [message, setMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
 	const messagesEndRef = useRef(null);
 	const fileInputRef = useRef(null);
+	const messagesContainerRef = useRef(null);
+
+	// Refs for preserving scroll position when prepending older messages
+	const isPrependingRef = useRef(false);
+	const prevScrollHeightRef = useRef(0);
+	const initialLoadRef = useRef(true);
 
 	// Keep local messages in sync when conversation changes or when messages array updates
 	useEffect(() => {
+		// Conversation changed -> reset state
 		setMessages(conversation?.messages || []);
+		initialLoadRef.current = true;
 	}, [conversation]);
 
-	const scrollToBottom = () => {
-		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-	};
+	const scrollToBottom = useCallback((behavior = 'smooth') => {
+		messagesEndRef.current?.scrollIntoView({ behavior });
+	}, []);
 
+	// Apply intelligent scrolling after messages update
 	useEffect(() => {
-		scrollToBottom();
-	}, [messages]);
+		const el = messagesContainerRef.current;
+
+		if (initialLoadRef.current) {
+			// Initial load: jump to bottom immediately
+			scrollToBottom('auto');
+			initialLoadRef.current = false;
+			return;
+		}
+
+		if (isPrependingRef.current) {
+			// We recorded previous scrollHeight before calling onLoadMore
+			if (el) {
+				const newScrollHeight = el.scrollHeight;
+				const delta = newScrollHeight - prevScrollHeightRef.current;
+				// Preserve the viewport position by scrolling down by the added height
+				el.scrollTop = delta;
+			}
+			isPrependingRef.current = false;
+			prevScrollHeightRef.current = 0;
+			return;
+		}
+
+		// Default: a new message appended -> scroll to bottom smoothly
+		scrollToBottom('smooth');
+	}, [messages, scrollToBottom]);
+
+	// Scroll handler to detect reaching the top and load older messages
+	const handleScroll = async (e) => {
+		const el = messagesContainerRef.current;
+		if (!el || typeof onLoadMore !== 'function') return;
+
+		// If near top (20px), trigger load more
+		if (el.scrollTop <= 20) {
+			// Do not trigger if already loading or no more pages
+			if (conversation.loadingMore || !conversation.hasMore) return;
+
+			// Prepare to preserve scroll position
+			isPrependingRef.current = true;
+			prevScrollHeightRef.current = el.scrollHeight;
+
+			// Call parent to fetch older messages. Parent will update conversation.messages prop
+			try {
+				await onLoadMore();
+			} catch (err) {
+				console.error('onLoadMore failed:', err);
+				// reset prepending flags to avoid locking
+				isPrependingRef.current = false;
+				prevScrollHeightRef.current = 0;
+			}
+		}
+	};
 
 	const handleSend = () => {
 		if (message.trim()) {
@@ -164,6 +222,8 @@ export default function ChatBox({ conversation, onSendMessage }) {
 
 			{/* Messages Area */}
 			<div
+				ref={messagesContainerRef}
+				onScroll={handleScroll}
 				style={{
 					flex: 1,
 					overflowY: 'auto',
@@ -171,6 +231,11 @@ export default function ChatBox({ conversation, onSendMessage }) {
 					background: '#f8f9fa',
 				}}
 			>
+				{/* Optionally show a small loader at top when loading more */}
+				{conversation.loadingMore && (
+					<div style={{ textAlign: 'center', marginBottom: '8px', color: '#666' }}>Đang tải...</div>
+				)}
+
 				{messages.map((msg) => (
 					<div
 						key={msg.id}

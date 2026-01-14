@@ -35,7 +35,8 @@ const SOCKET_CONFIG = {
   withCredentials: true,
 };
 const MESSAGE_TIMEOUT = 5000;
-const MESSAGE_LIMIT = 50;
+// Use 20 per page for chat lazy-loading as requested
+const MESSAGE_LIMIT = 20;
 const MAX_CONVERSATIONS = 2000;
 
 // Filter options configuration
@@ -394,10 +395,15 @@ export default function ChatManagementPage() {
       // Mark as read in sidebar
       updateConversationInList(conversation.id, { isUnread: false });
 
+      // Prepare pagination metadata for the selected chat
       setSelectedChat({
         ...conversation,
         messages: msgs,
-        loadingMessages: false
+        loadingMessages: false,
+        loadingMore: false,
+        skip: msgs.length,
+        limit: MESSAGE_LIMIT,
+        hasMore: msgs.length === MESSAGE_LIMIT,
       });
 
       // Persist selection
@@ -414,10 +420,49 @@ export default function ChatManagementPage() {
       setSelectedChat({
         ...conversation,
         messages: [],
-        loadingMessages: false
+        loadingMessages: false,
+        loadingMore: false,
+        skip: 0,
+        limit: MESSAGE_LIMIT,
+        hasMore: false,
       });
     }
   }, [accountId, mapMessageDocToClient, updateConversationInList]);
+
+  // Handler to load older messages (lazy-load / infinite scroll)
+  const handleLoadMoreMessages = useCallback(async () => {
+    if (!selectedChat) return [];
+    if (selectedChat.loadingMore) return [];
+    if (!selectedChat.hasMore) return [];
+
+    setSelectedChat(prev => ({ ...prev, loadingMore: true }));
+
+    try {
+      let res;
+      if (selectedChat.platform === 'zalo') {
+        res = await getZaloConversationMessages(accountId, selectedChat.id, { limit: selectedChat.limit, skip: selectedChat.skip });
+      } else {
+        res = await getConversationMessages(accountId, selectedChat.id, { limit: selectedChat.limit, skip: selectedChat.skip });
+      }
+
+      const newMsgs = (res?.data || []).map(mapMessageDocToClient);
+
+      // Prepend older messages
+      setSelectedChat(prev => ({
+        ...prev,
+        messages: [...newMsgs, ...(prev.messages || [])],
+        skip: (prev.skip || 0) + newMsgs.length,
+        hasMore: newMsgs.length === (prev.limit || MESSAGE_LIMIT),
+        loadingMore: false,
+      }));
+
+      return newMsgs;
+    } catch (error) {
+      console.error('Failed to load more messages:', error);
+      setSelectedChat(prev => ({ ...prev, loadingMore: false }));
+      return [];
+    }
+  }, [selectedChat, accountId, mapMessageDocToClient]);
 
   // Handle sending messages
   const handleSendMessage = useCallback(async (newMessage) => {
@@ -793,7 +838,11 @@ export default function ChatManagementPage() {
       {/* Main Content */}
       <Content style={{ display: 'flex' }}>
         {selectedChat ? (
-          <ChatBox conversation={selectedChat} onSendMessage={handleSendMessage} />
+          <ChatBox
+            conversation={selectedChat}
+            onSendMessage={handleSendMessage}
+            onLoadMore={handleLoadMoreMessages}
+          />
         ) : (
           <div
             style={{

@@ -430,14 +430,24 @@ def webhook_event():
                 avatar=sender_profile.get('avatar') if sender_profile else None,
             )
 
-            # Upsert conversation and get conversation_id
-            # Only update last_message_text if we have actual text
-            # For attachment-only messages, we still want to update the conversation timestamp
+            # Determine a friendly preview for the conversation's last message.
+            # - If there is text (or sticker_id) use it
+            # - If no text but the message contains attachments/images, show an attachment label
+            msg_obj = messaging.get('message') or {}
+            preview_text = message_text
+            try:
+                if not preview_text:
+                    # Facebook attachments appear under 'attachments'
+                    if (isinstance(msg_obj.get('attachments'), list) and len(msg_obj.get('attachments')) > 0) or msg_obj.get('image') or msg_obj.get('attachment'):
+                        preview_text = 'Tệp đính kèm'
+            except Exception:
+                preview_text = preview_text
+
             conversation_doc = conversation_model.upsert_conversation(
                 oa_id=integration.get('oa_id'),
                 customer_id=customer_id,
-                last_message_text=message_text,  # Can be None for attachment-only messages
-                last_message_created_at=datetime.utcnow() if message_text else None,
+                last_message_text=preview_text,  # Will be None if no text/attachments
+                last_message_created_at=datetime.utcnow() if preview_text else None,
                 direction=direction,
                 customer_info={
                     'name': sender_profile.get('name') if sender_profile else None,
@@ -693,8 +703,22 @@ def get_conversation_messages(conv_id):
     if platform != 'facebook':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    limit = request.args.get('limit', 100)
-    skip = request.args.get('skip', 0)
+    # Pagination parameters: default to 20 messages per page for chat UI
+    try:
+        limit = int(request.args.get('limit', 20))
+    except Exception:
+        limit = 20
+    try:
+        skip = int(request.args.get('skip', 0))
+    except Exception:
+        skip = 0
+    # Safety caps
+    if limit < 0:
+        limit = 0
+    if skip < 0:
+        skip = 0
+    if limit > 200:
+        limit = 200
 
     try:
         from models.conversation import ConversationModel

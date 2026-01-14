@@ -547,11 +547,23 @@ def webhook_event():
     except Exception:
         customer_info = {}
 
+    # Determine preview for last message: if message text is empty but payload contains attachments/images, show attachment label
+    preview_text = message
+    try:
+        if not preview_text:
+            mo = message_obj or data
+            if isinstance(mo, dict) and (
+                mo.get('attachment') or mo.get('attachments') or mo.get('image') or mo.get('media') or mo.get('files')
+            ):
+                preview_text = 'Tệp đính kèm'
+    except Exception:
+        preview_text = preview_text
+
     conversation_doc = conversation_model.upsert_conversation(
         oa_id=resolved_oa_id,
         customer_id=customer_id,
-        last_message_text=message,
-        last_message_created_at=datetime.utcnow(),
+        last_message_text=preview_text,
+        last_message_created_at=datetime.utcnow() if preview_text else None,
         direction=direction,
         customer_info=customer_info if customer_info else None,
         increment_unread=(direction == 'in'),
@@ -1049,8 +1061,22 @@ def get_conversation_messages(conv_id):
     if platform != 'zalo':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    limit = request.args.get('limit', 100)
-    skip = request.args.get('skip', 0)
+    # Pagination parameters: default to 20 messages per page for chat UI
+    try:
+        limit = int(request.args.get('limit', 20))
+    except Exception:
+        limit = 20
+    try:
+        skip = int(request.args.get('skip', 0))
+    except Exception:
+        skip = 0
+    # Safety caps
+    if limit < 0:
+        limit = 0
+    if skip < 0:
+        skip = 0
+    if limit > 200:
+        limit = 200
 
     try:
         from models.conversation import ConversationModel

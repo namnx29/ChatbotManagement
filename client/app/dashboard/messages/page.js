@@ -273,6 +273,22 @@ export default function ChatManagementPage() {
             messages: [...prev.messages, newMsgClient]
           };
         });
+
+        // If the conversation is open and we received an incoming message, mark it as read on the server and in UI
+        if (payload.direction === 'in') {
+          (async () => {
+            try {
+              updateConversationInList(convId, { isUnread: false });
+              if (payload.platform === 'zalo') {
+                await markZaloConversationRead(accountId, convId);
+              } else {
+                await markConversationRead(accountId, convId);
+              }
+            } catch (e) {
+              console.error('Failed to mark conversation read on incoming message:', e);
+            }
+          })();
+        }
       }
     };
 
@@ -476,6 +492,18 @@ export default function ChatManagementPage() {
             newMessage.text
           );
         }
+      }
+
+      // After successful send, mark conversation as read in UI and on the server
+      try {
+        updateConversationInList(selectedChat.id, { isUnread: false });
+        if (selectedChat.platform === 'zalo') {
+          await markZaloConversationRead(accountId, selectedChat.id);
+        } else {
+          await markConversationRead(accountId, selectedChat.id);
+        }
+      } catch (e) {
+        console.error('Failed to mark conversation read after send:', e);
       }
 
     } catch (error) {

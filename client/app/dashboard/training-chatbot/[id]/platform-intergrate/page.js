@@ -1,6 +1,6 @@
 "use client";
 
-import { Layout, Input, Button, Radio, message, Modal } from "antd";
+import { Layout, Input, Button, Radio, App, Card, Row, Col, Typography, Empty, Spin } from "antd";
 import {
   SearchOutlined,
   CloseOutlined,
@@ -14,9 +14,11 @@ import { useState, useEffect, useRef } from "react";
 import PlatformConnectTemplate from "@/lib/components/PlatformIntegrateTemplate";
 
 const { Sider, Content } = Layout;
+const { Text } = Typography;
 
 export default function PlatformIntegrationPage() {
   const [selectedPlatform, setSelectedPlatform] = useState("all");
+  const { message, modal } = App.useApp();
 
   const platforms = [
     {
@@ -130,9 +132,8 @@ export default function PlatformIntegrationPage() {
   const fetchIntegrations = async (platformOverride = null) => {
     setLoadingInts(true);
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+      const base = process.env.NEXT_PUBLIC_API_URL;
       const chatbotId = getChatbotIdFromPath();
-      // Determine platform: explicit override -> selectedPlatform state ("all" means no platform filter)
       const platform = platformOverride !== null ? platformOverride : (selectedPlatform === "all" ? null : selectedPlatform);
       let url = `${base}/api/integrations`;
       const qs = [];
@@ -144,7 +145,6 @@ export default function PlatformIntegrationPage() {
         headers: {
           "Content-Type": "application/json",
           "Accept": "application/json",
-          "ngrok-skip-browser-warning": "true",
           "X-Account-Id": localStorage.getItem("accountId") || "test-account",
         },
       });
@@ -153,7 +153,7 @@ export default function PlatformIntegrationPage() {
       if (!ct.includes("application/json")) {
         const text = await res.text();
         console.error("Unexpected non-JSON response when requesting integrations:", text);
-        Modal.error({
+        modal.error({
           title: 'Failed to load integrations',
           content: (
             <div>
@@ -191,9 +191,6 @@ export default function PlatformIntegrationPage() {
         const oa_id = qs.get("oa_id");
         const status = qs.get("status");
         const conflict_type = qs.get("conflict_type");
-        const conflict_chatbotId = qs.get("conflict_chatbotId");
-        const conflict_chatbotName = qs.get("conflict_chatbotName");
-        const other_oa_id = qs.get("other_oa_id");
         const platform = qs.get("platform");
 
         // If callback provided a platform, set the UI filter so the correct list is shown
@@ -203,50 +200,37 @@ export default function PlatformIntegrationPage() {
 
         if (oa_id && platform && !notifiedRef.current) {
           notifiedRef.current = true
-          // Refresh list for the specific platform so the new integration will be visible
+          // Refresh list first
           const list = await fetchIntegrations(platform);
           const found = (list || []).find((it) => it && it.oa_id === oa_id);
 
-          const platformLabel = platform === 'facebook' ? 'Facebook Page' : 'Zalo OA'
-
           if (status === "already") {
-            const display = found ? (found.name || found.oa_name || found.oa_id) : oa_id
-            message.info(`${platformLabel} already connected: ${display}`);
+            message.info(`Tài khoản này đã được kết nối trước đó`);
           } else if (status === "connected") {
-            const display = found ? (found.name || found.oa_name || found.oa_id) : oa_id
-            message.success(`${platformLabel} connected: ${display}`);
+            message.success(`Kết nối thành công`);
           } else if (status === "conflict") {
-            // handle conflict types
             if (conflict_type === "oa_assigned") {
-              const name = conflict_chatbotName || conflict_chatbotId || "another chatbot"
-              Modal.confirm({
-                title: `${platformLabel} đã được kết nối`,
-                content: `Nền tảng ${platformLabel} này đã được kết nối với bot "${name}". Vui lòng chuyển đến bot đó để hủy kết nối trước khi thêm vào bot này.`,
-                okText: 'Đến bot',
+              modal.confirm({
+                title: 'Đã được kết nối',
+                content: `Tài khoản này đã được kết nối với bot khác`,
                 cancelText: 'Đóng',
-                onOk: () => {
-                  if (conflict_chatbotId) {
-                    window.location.href = `/dashboard/training-chatbot/${conflict_chatbotId}/platform-intergrate`;
-                  }
-                }
               })
             } else if (conflict_type === "chatbot_has_other") {
-              Modal.warning({
-                title: 'Bot đã có OA khác',
-                content: `Bot này đã có OA khác (ID: ${other_oa_id}). Vui lòng hủy kích hoạt OA hiện tại nếu bạn muốn thay thế.`
+              modal.warning({
+                title: 'Bot đã có Zalo OA',
+                content: `Bot này đã có Zalo OA. Vui lòng hủy kích hoạt OA hiện tại nếu bạn muốn thay thế.`
               })
             } else {
               message.warning('Kết nối không thành công do xung đột.');
             }
           }
 
-          // Clear query params from URL so it doesn't re-alert on refresh
           const url = new URL(window.location.href);
           url.search = "";
           window.history.replaceState({}, "", url.toString());
         }
       } catch (e) {
-        // ignore
+
       }
     };
     init();
@@ -269,8 +253,7 @@ export default function PlatformIntegrationPage() {
       }
       onClick={async () => {
         try {
-          const base =
-            process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+          const base = process.env.NEXT_PUBLIC_API_URL;
           const chatbotId = getChatbotIdFromPath();
           const url = chatbotId
             ? `${base}/api/zalo/auth-url?chatbotId=${chatbotId}`
@@ -281,7 +264,6 @@ export default function PlatformIntegrationPage() {
             headers: {
               "Content-Type": "application/json",
               "Accept": "application/json",
-              "ngrok-skip-browser-warning": "true",
               "X-Account-Id":
                 localStorage.getItem("accountId") || "test-account",
             },
@@ -294,16 +276,9 @@ export default function PlatformIntegrationPage() {
               "Unexpected non-JSON response when requesting Zalo auth url:",
               text
             );
-            Modal.error({
-              title: 'Failed to initiate Zalo connection',
-              content: (
-                <div>
-                  <p>Unexpected response from server when requesting auth URL.</p>
-                  <pre style={{ maxHeight: 200, overflow: 'auto' }}>{String(text).slice(0, 1000)}</pre>
-                  <p style={{ marginTop: 8 }}>Possible causes: backend not running, incorrect <code>NEXT_PUBLIC_API_URL</code>, or a temporary tunnel/ngrok error.</p>
-                </div>
-              ),
-            });
+            alert(
+              "Unexpected response from server. Check backend URL and CORS."
+            );
             return;
           }
 
@@ -312,7 +287,7 @@ export default function PlatformIntegrationPage() {
             window.location.href = data.auth_url;
           } else {
             console.error("Failed to get Zalo auth url", data);
-            Modal.error({ title: 'Could not initiate Zalo connection', content: JSON.stringify(data) });
+            alert("Could not initiate Zalo connection");
           }
         } catch (err) {
           console.error(err);
@@ -325,7 +300,7 @@ export default function PlatformIntegrationPage() {
   const handlePlatformLogin = async (platformKey) => {
     if (platformKey === 'facebook') {
       try {
-        const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+        const base = process.env.NEXT_PUBLIC_API_URL;
         const chatbotId = getChatbotIdFromPath();
         const url = chatbotId ? `${base}/api/facebook/auth-url?chatbotId=${chatbotId}` : `${base}/api/facebook/auth-url`;
         const res = await fetch(url, {
@@ -334,7 +309,6 @@ export default function PlatformIntegrationPage() {
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'ngrok-skip-browser-warning': 'true',
             'X-Account-Id': localStorage.getItem('accountId') || 'test-account',
           },
         });
@@ -343,13 +317,13 @@ export default function PlatformIntegrationPage() {
         if (!ct.includes('application/json')) {
           const text = await res.text();
           console.error('Unexpected non-JSON response when requesting Facebook auth url:', text);
-          Modal.error({
+          modal.error({
             title: 'Failed to initiate Facebook connection',
             content: (
               <div>
                 <p>Unexpected response from server when requesting auth URL.</p>
-                <pre style={{maxHeight:200, overflow:'auto'}}>{String(text).slice(0, 1000)}</pre>
-                <p style={{marginTop:8}}>Possible causes: backend not running, incorrect <code>NEXT_PUBLIC_API_URL</code>, or a temporary tunnel/ngrok error.</p>
+                <pre style={{ maxHeight: 200, overflow: 'auto' }}>{String(text).slice(0, 1000)}</pre>
+                <p style={{ marginTop: 8 }}>Possible causes: backend not running, incorrect <code>NEXT_PUBLIC_API_URL</code>, or a temporary tunnel/ngrok error.</p>
               </div>
             ),
           });
@@ -361,7 +335,7 @@ export default function PlatformIntegrationPage() {
           window.location.href = data.auth_url;
         } else {
           console.error('Failed to get Facebook auth url', data);
-          Modal.error({ title: 'Could not initiate Facebook connection', content: JSON.stringify(data) });
+          modal.error({ title: 'Could not initiate Facebook connection', content: JSON.stringify(data) });
         }
       } catch (err) {
         console.error(err);
@@ -447,31 +421,23 @@ export default function PlatformIntegrationPage() {
         }}
       >
         <h1 style={{ fontSize: "24px", fontWeight: "600", margin: 0 }}>
-          Danh sách các nền tảng đã tích hợp
+          Nền tảng đã tích hợp
         </h1>
         <Input
-          placeholder="Tìm theo tên hoặc ID page..."
+          placeholder="Tìm theo tên hoặc ID..."
           prefix={<SearchOutlined style={{ color: "#999" }} />}
           style={{ width: "320px", height: "40px" }}
         />
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "32px",
-        }}
-      >
-        <Radio>Chọn tất cả</Radio>
-
+      <div style={{ marginBottom: "20px", display: 'flex', justifyContent: 'flex-end' }}>
         <Button
+          danger
           icon={<CloseOutlined />}
           disabled={!selectedIntegration}
           onClick={() => {
             if (!selectedIntegration) return;
-            Modal.confirm({
+            modal.confirm({
               title: "Hủy kích hoạt OA",
               content: `Bạn có chắc muốn hủy kích hoạt ${selectedIntegration.name || selectedIntegration.oa_name || selectedIntegration.oa_id}?`,
               okText: "Hủy kích hoạt",
@@ -479,7 +445,7 @@ export default function PlatformIntegrationPage() {
               cancelText: "Hủy",
               onOk: async () => {
                 try {
-                  const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+                  const base = process.env.NEXT_PUBLIC_API_URL;
                   const res = await fetch(`${base}/api/integrations/${selectedIntegration._id}`, {
                     method: "DELETE",
                     headers: {
@@ -502,132 +468,85 @@ export default function PlatformIntegrationPage() {
               },
             });
           }}
-          style={{
-            color: "#6c3fb5",
-            borderColor: "#6c3fb5",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
         >
           Hủy kích hoạt
         </Button>
       </div>
 
-      {/* Show Zalo integrations here in the default list */}
-      <div
-        style={{
-          minHeight: "400px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        <div style={{ marginBottom: 20 }}>
-          {loadingInts ? (
-            <p>Đang tải...</p>
-          ) : integrations.length ? (
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {integrations.map((it) => (
-                <div
-                  key={it._id}
-                  onClick={() => setSelectedIntegration(it)}
-                  style={{
-                    border: selectedIntegration && selectedIntegration._id === it._id ? "1px solid #6c3fb5" : "1px solid #eee",
-                    background: selectedIntegration && selectedIntegration._id === it._id ? "#f5f5ff" : "white",
-                    padding: 12,
-                    borderRadius: 8,
-                    minWidth: 220,
-                    display: "flex",
-                    gap: 12,
-                    alignItems: "center",
-                    cursor: "pointer",
-                  }}
-                >
-                  <img
-                    src={it.avatar_url || "/Zalo.png"}
-                    alt="avatar"
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 8,
-                      objectFit: "cover",
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
-                    >
-                      <strong style={{ fontSize: 14 }}>
-                        {it.name || it.oa_name || it.oa_id}
-                      </strong>
-                      {it.is_active && (
-                        <span
-                          style={{
-                            width: 10,
-                            height: 10,
-                            background: "#24b14b",
-                            borderRadius: "50%",
-                            display: "inline-block",
-                          }}
-                        />
-                      )}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#666" }}>
-                      Kích hoạt: {new Date(it.created_at).toLocaleString('vi-VN')}
-                    </div>
+      {loadingInts ? (
+        <div style={{ textAlign: 'center', padding: '50px' }}><Spin size="large" /></div>
+      ) : integrations.length ? (
+        /* --- GRID LAYOUT --- */
+        <Row gutter={[16, 16]}>
+          {integrations.map((it) => (
+            <Col xs={24} sm={12} md={12} key={it._id}>
+              <Card
+                hoverable
+                onClick={() => setSelectedIntegration(it)}
+                style={{
+                  borderRadius: '12px',
+                  transition: 'all 0.3s',
+                  border: selectedIntegration?._id === it._id ? "2px solid #6c3fb5" : "1px solid #f0f0f0",
+                  background: selectedIntegration?._id === it._id ? "#f5f5ff" : "white",
+                }}
+                styles={{ body: { padding: '16px' } }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <img
+                      src={it.avatar_url || "/Zalo.png"}
+                      alt="avatar"
+                      style={{
+                        width: 54,
+                        height: 54,
+                        borderRadius: 10,
+                        objectFit: "cover",
+                        border: '1px solid #eee'
+                      }}
+                    />
+                    {it.is_active && (
+                      <div style={{
+                        position: 'absolute',
+                        bottom: -2,
+                        right: -2,
+                        width: 14,
+                        height: 14,
+                        background: "#52c41a",
+                        border: '2px solid white',
+                        borderRadius: '50%'
+                      }} />
+                    )}
+                  </div>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <Text strong style={{ fontSize: 15, display: 'block' }} ellipsis>
+                      {it.name || it.oa_name || it.oa_id}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {it.platform?.toUpperCase()}
+                    </Text>
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                minHeight: 240,
-              }}
-            >
-              <div
-                style={{
-                  width: "120px",
-                  height: "120px",
-                  background: "#f5f5f5",
-                  borderRadius: "12px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  marginBottom: "16px",
-                  position: "relative",
-                }}
-              >
-                <span style={{ fontSize: "48px" }}>📦</span>
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "-10px",
-                    right: "-10px",
-                    width: "40px",
-                    height: "40px",
-                    background: "#e3f2fd",
-                    borderRadius: "50%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <span style={{ fontSize: "24px" }}>✈️</span>
+
+                <div style={{
+                  marginTop: '12px',
+                  paddingTop: '12px',
+                  borderTop: '1px solid #f0f0f0',
+                  fontSize: '11px',
+                  color: '#999'
+                }}>
+                  <ClockCircleOutlined /> Kết nối: {new Date(it.created_at).toLocaleDateString('vi-VN')}
                 </div>
-              </div>
-              <p style={{ fontSize: "15px", color: "#666" }}>
-                Chưa có nền tảng nào đã kích hoạt
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      ) : (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="Chưa có nền tảng nào được kích hoạt"
+          style={{ marginTop: 60 }}
+        />
+      )}
     </>
   );
 
@@ -652,7 +571,7 @@ export default function PlatformIntegrationPage() {
     <div>
       <div
         style={{
-          padding: "16px 20px",
+          padding: "13px 20px",
           borderBottom: "1px solid #f0f0f0",
           display: "flex",
           alignItems: "center",

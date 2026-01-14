@@ -13,6 +13,10 @@ from datetime import datetime, timedelta
 zalo_bp = Blueprint('zalo', __name__)
 logger = logging.getLogger(__name__)
 
+class ImageTooLargeError(Exception):
+    """Raised when an image exceeds the configured upload size limit."""
+    pass
+
 PKCE_TTL = 600  # seconds
 
 
@@ -65,7 +69,7 @@ def get_auth_url():
     return jsonify({'success': True, 'auth_url': auth_url, 'state': state, 'code_challenge': code_challenge}), 200
 
 
-@zalo_bp.route('/api/zalo/callback', methods=['GET', 'POST'])
+@zalo_bp.route('/zalo-auth-exclusive-callback', methods=['GET', 'POST'])
 def zalo_callback():
     # Zalo redirects to this URL with ?code=...&state=...
     code = request.args.get('code') or (request.get_json(silent=True) or {}).get('code')
@@ -160,6 +164,26 @@ def zalo_callback():
 
     # Persist integration (include name/avatar if available)
     integration_model = IntegrationModel(current_app.mongo_client)
+
+    # If oa_id wasn't available from token exchange, try to derive it from profile_data (meta) and bind it
+    try:
+        if (not oa_id) and isinstance(profile_data, dict):
+            candidate = profile_data.get('oa_id') or profile_data.get('id') or profile_data.get('oaId')
+            if candidate:
+                oa_id = str(candidate)
+                logger.info(f"Derived oa_id from profile data: {oa_id}")
+    except Exception as e:
+        logger.warning(f"Failed to derive oa_id from profile data: {e}")
+
+    # If we have an oa_id from profile but an existing integration stored the oa_id in meta.profile, backfill that integration's top-level oa_id
+    try:
+        if oa_id:
+            raw_existing = integration_model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+            if raw_existing and not raw_existing.get('oa_id'):
+                integration_model.collection.update_one({'_id': raw_existing.get('_id')}, {'$set': {'oa_id': oa_id, 'updated_at': datetime.utcnow()}})
+                logger.info(f"Backfilled integration {str(raw_existing.get('_id'))} with oa_id {oa_id}")
+    except Exception as e:
+        logger.warning(f"Failed to backfill integration oa_id from profile: {e}")
 
     # Check conflicts / existing assignments before upserting
     existing_global = integration_model.find_by_platform_and_oa('zalo', oa_id)
@@ -264,7 +288,7 @@ def zalo_callback():
     return redirect(target, code=302)
 
 
-@zalo_bp.route('/webhooks/zalo', methods=['GET'])
+@zalo_bp.route('/webhook', methods=['GET'])
 def webhook_verify():
     # Zalo verification - simply check verification token and echo challenge if present
     token = request.args.get('verify_token') or request.args.get('verifyToken') or request.args.get('token')
@@ -278,57 +302,119 @@ def webhook_verify():
         return 'verification failed', 403
 
 
-@zalo_bp.route('/webhooks/zalo', methods=['POST'])
+@zalo_bp.route('/webhook', methods=['POST'])
 def webhook_event():
     data = request.get_json() or {}
     logger.info(f"Zalo webhook event received: {data}")
 
     # Example payloads may differ; try to extract oa_id, event type and sender
-    oa_id = data.get('oa_id') or data.get('page_id') or (data.get('data') or {}).get('oa_id')
-    event_type = data.get('event') or (data.get('data') or {}).get('event')
+    # Extract OA id from common locations (top-level, recipient, data, or page_id)
+    oa_id = (
+        data.get('oa_id')
+        or data.get('page_id')
+        or (data.get('recipient') or {}).get('id')
+        or (data.get('to') or {}).get('id')
+        or (data.get('data') or {}).get('oa_id')
+    )
+
+    # Determine event type (support event_name variants)
+    event_type = (
+        data.get('event')
+        or data.get('event_name')
+        or (data.get('data') or {}).get('event')
+        or (data.get('data') or {}).get('type')
+    )
+
     message = None
     sender_id = None
     recipient_id = None
     direction = 'in'  # Default to incoming
 
-    # Attempt to find message contents
+    # Attempt to find message contents (support multiple webhook shapes)
     try:
-        if 'data' in data:
-            d = data['data']
-            # Text
-            if d.get('type') == 'user_send_text':
-                message = d.get('text')
-                sender_id = d.get('sender') or d.get('user_id')
-                event_type = 'user_send_text'
-                direction = 'in'
-            elif d.get('type') == 'oa_send_text' or d.get('type') == 'oa_reply':
-                # Outgoing message from OA
+        # Case A: nested data payload (common format)
+        d = data.get('data') if isinstance(data.get('data'), dict) else None
+        if d:
+            dtype = d.get('type') or d.get('event') or d.get('event_name')
+            # Incoming from user
+            if dtype and 'user' in dtype and 'send' in dtype:
                 message = d.get('text') or d.get('message')
-                recipient_id = d.get('recipient') or d.get('user_id')
-                sender_id = oa_id  # OA is the sender
+                sender_id = (d.get('sender') or {}).get('id') or d.get('sender') or d.get('user_id')
+                recipient_id = (d.get('recipient') or {}).get('id') or d.get('recipient') or (d.get('to') or {}).get('id')
+                event_type = dtype
+                direction = 'in'
+            # Outgoing from OA
+            elif dtype and ('oa' in dtype or 'bot' in dtype) and ('send' in dtype or 'reply' in dtype):
+                message = d.get('text') or d.get('message')
+                recipient_id = (d.get('recipient') or {}).get('id') or d.get('recipient') or d.get('user_id') or (d.get('to') or {}).get('id')
+                sender_id = oa_id or (d.get('sender') or {}).get('id')
+                event_type = dtype
                 direction = 'out'
             else:
                 # generic handlers
                 message = d.get('text') or d.get('message') or None
-                sender_id = d.get('sender') or d.get('user_id') or (d.get('from') or {}).get('id')
-                recipient_id = d.get('recipient') or (d.get('to') or {}).get('id')
+                sender_id = (d.get('sender') or {}).get('id') or d.get('sender') or d.get('user_id') or (d.get('from') or {}).get('id')
+                recipient_id = (d.get('recipient') or {}).get('id') or d.get('recipient') or (d.get('to') or {}).get('id')
         else:
-            # fallback raw structure
-            message = data.get('text') or (data.get('message') or {}).get('text')
-            sender_id = data.get('sender') or data.get('user_id') or (data.get('from') or {}).get('id')
-            recipient_id = data.get('recipient') or (data.get('to') or {}).get('id')
+            # Case B: top-level event_name style (simple payloads)
+            etop = data.get('event_name') or data.get('event')
+            if etop and etop.startswith('user'):
+                message = (data.get('message') or {}).get('text') or data.get('text')
+                sender_id = (data.get('sender') or {}).get('id') or data.get('sender') or data.get('user_id')
+                recipient_id = (data.get('recipient') or {}).get('id') or (data.get('to') or {}).get('id')
+                event_type = etop
+                direction = 'in'
+            elif etop and (etop.startswith('oa') or etop.startswith('bot')):
+                message = (data.get('message') or {}).get('text') or data.get('text')
+                recipient_id = (data.get('recipient') or {}).get('id') or (data.get('to') or {}).get('id') or data.get('user_id')
+                sender_id = oa_id
+                event_type = etop
+                direction = 'out'
+            else:
+                # Fallback generic top-level
+                message = (data.get('message') or {}).get('text') or data.get('text') or None
+                sender_id = (data.get('sender') or {}).get('id') or data.get('sender') or data.get('user_id') or (data.get('from') or {}).get('id')
+                recipient_id = (data.get('recipient') or {}).get('id') or (data.get('to') or {}).get('id')
     except Exception as e:
         logger.warning(f"Failed to extract message fields: {e}")
 
-    # Look up integration by oa_id
+    logger.info(f"Parsed Zalo webhook: oa_id={oa_id}, event_type={event_type}, sender={sender_id}, recipient={recipient_id}, direction={direction}, message={message}")
+
+    message_obj = None
+    try:
+        # If nested payload exists, prefer its 'message' sub-object or the nested dict itself
+        d = data.get('data') if isinstance(data.get('data'), dict) else None
+        if d:
+            message_obj = d.get('message') or d
+        elif isinstance(data.get('message'), dict):
+            message_obj = data.get('message')
+        else:
+            message_obj = None
+    except Exception:
+        message_obj = None
+
+    # Look up integration by oa_id (support fallbacks where oa_id may be stored in meta.profile)
     integration_model = IntegrationModel(current_app.mongo_client)
     integration = None
     if oa_id:
         integration = integration_model.find_by_platform_and_oa('zalo', oa_id)
+        if not integration:
+            # Fallback: check meta.profile.oa_id (some integrations may have oa_id only in meta(profile) due to earlier bugs)
+            try:
+                raw = integration_model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+                if raw:
+                    integration = integration_model._serialize(raw)
+                    logger.info(f"Found integration by meta.profile.oa_id fallback for oa_id {oa_id}")
+            except Exception as e:
+                logger.warning(f"Fallback lookup by meta.profile failed: {e}")
     else:
         # If oa_id not provided, attempt to find any active integration (not ideal)
-        all_ints = integration_model.find_by_account(None)
-        integration = all_ints[0] if all_ints else None
+        try:
+            # Fetch any active zalo integration as a last resort
+            raw_any = integration_model.collection.find_one({'platform': 'zalo', 'is_active': True})
+            integration = integration_model._serialize(raw_any) if raw_any else None
+        except Exception:
+            integration = None
 
     if not integration or not integration.get('is_active'):
         logger.info('Integration not found or inactive; ignoring message')
@@ -362,17 +448,116 @@ def webhook_event():
         platform_specific_id=customer_platform_id,
     )
 
-    # Upsert conversation
+    # If profile info is missing (name or avatar), attempt to fetch it from Zalo OA API
+    try:
+        needs_fetch = not customer_doc.get('name') or not customer_doc.get('avatar')
+    except Exception:
+        needs_fetch = True
+
+    if needs_fetch:
+        def _fetch_zalo_user_profile(access_token, user_id):
+            if not access_token or str(access_token).startswith("mock"):
+                return {}
+
+            try:
+                url = "https://openapi.zalo.me/v3.0/oa/user/detail"
+                headers = {
+                    "access_token": access_token,
+                    "Content-Type": "application/json"
+                }
+
+                payload = {
+                    "user_id": str(user_id)
+                }
+
+                # IMPORTANT: must use GET with JSON body, not params
+                resp = requests.get(url, headers=headers, json=payload, timeout=8)
+                data = resp.json() or {}
+
+                if data.get("error") != 0:
+                    logger.warning(f"Zalo user detail API error for user {user_id}: {data}")
+                    return {}
+
+                profile = data.get("data") or {}
+
+                return {
+                    "name": profile.get("display_name"),
+                    "avatar": profile.get("avatar"),
+                }
+
+            except Exception as e:
+                logger.warning(f"Fetch Zalo profile failed for {user_id}: {e}")
+                return {}
+
+        fetched = _fetch_zalo_user_profile(integration.get('access_token'), customer_platform_id)
+        if fetched:
+            try:
+                # Update customer record with fetched fields
+                customer_doc = customer_model.upsert_customer(
+                    platform='zalo',
+                    platform_specific_id=customer_platform_id,
+                    name=fetched.get('name'),
+                    avatar=fetched.get('avatar')
+                )
+                logger.info(f"Fetched and updated customer profile for zalo:{customer_platform_id}")
+            except Exception as e:
+                logger.warning(f"Failed to upsert fetched profile for {customer_platform_id}: {e}")
+
+    # Resolve a canonical OA id to use for conversation storage
+    resolved_oa_id = None
+    try:
+        if oa_id:
+            resolved_oa_id = oa_id
+        elif integration and integration.get('oa_id'):
+            resolved_oa_id = integration.get('oa_id')
+        elif integration and isinstance(integration.get('meta'), dict):
+            resolved_oa_id = (integration.get('meta') or {}).get('profile', {}).get('oa_id')
+    except Exception:
+        resolved_oa_id = oa_id
+
+    # If an existing conversation exists with this customer but missing oa_id, patch it
+    try:
+        # Try to find any conversation by customer_id only (handles earlier bugs where oa_id was null)
+        existing_conv = conversation_model.collection.find_one({'customer_id': customer_id})
+        if existing_conv:
+            # If existing has no oa_id but we resolved one, patch it so future lookups succeed
+            if not existing_conv.get('oa_id') and resolved_oa_id:
+                try:
+                    conversation_model.collection.update_one({'_id': existing_conv.get('_id')}, {'$set': {'oa_id': resolved_oa_id, 'updated_at': datetime.utcnow()}})
+                    try:
+                        logger.info(f"Patched conversation {str(existing_conv.get('_id'))} with oa_id {resolved_oa_id}")
+                    except Exception:
+                        logger.info(f"Patched conversation (id) with oa_id {resolved_oa_id}")
+                    # Refresh existing_conv object
+                    existing_conv = conversation_model.collection.find_one({'_id': existing_conv.get('_id')})
+                except Exception as e:
+                    logger.warning(f"Failed to patch conversation oa_id: {e}")
+    except Exception as e:
+        logger.warning(f"Error checking existing conversation: {e}")
+
+    # Use resolved_oa_id when upserting (so oa_id isn't left null)
+    # Denormalize customer info into conversation if available
+    customer_info = {}
+    try:
+        if customer_doc:
+            customer_info = {
+                'name': customer_doc.get('name'),
+                'avatar': customer_doc.get('avatar'),
+            }
+    except Exception:
+        customer_info = {}
+
     conversation_doc = conversation_model.upsert_conversation(
-        oa_id=integration.get('oa_id'),
+        oa_id=resolved_oa_id,
         customer_id=customer_id,
         last_message_text=message,
         last_message_created_at=datetime.utcnow(),
         direction=direction,
+        customer_info=customer_info if customer_info else None,
         increment_unread=(direction == 'in'),
     )
-    
-    conversation_id = conversation_doc.get('_id')
+
+    conversation_id = conversation_doc.get('_id') if conversation_doc else (existing_conv.get('_id') if 'existing_conv' in locals() and existing_conv else None)
 
     # Persist message (dedupe outgoing echoes)
     deduped = False
@@ -391,7 +576,11 @@ def webhook_event():
                     sender_id=customer_platform_id,
                     direction=direction,
                     text=message,
-                    metadata=data,
+                    metadata=(message_obj or data),
+                    sender_profile={
+                        'name': customer_doc.get('name') if customer_doc else None,
+                        'avatar': customer_doc.get('avatar') if customer_doc else None,
+                    },
                     is_read=True,
                     conversation_id=conversation_id,
                 )
@@ -402,7 +591,11 @@ def webhook_event():
                 sender_id=customer_platform_id,
                 direction=direction,
                 text=message,
-                metadata=data,
+                metadata=(message_obj or data),
+                sender_profile={
+                    'name': customer_doc.get('name') if customer_doc else None,
+                    'avatar': customer_doc.get('avatar') if customer_doc else None,
+                },
                 is_read=False,
                 conversation_id=conversation_id,
             )
@@ -424,6 +617,10 @@ def webhook_event():
         'conversation_id': conversation_id,
         'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
         'direction': direction,
+        'sender_profile': {
+            'name': customer_doc.get('name') if customer_doc else None,
+            'avatar': customer_doc.get('avatar') if customer_doc else None,
+        },
     }
 
     try:
@@ -431,7 +628,7 @@ def webhook_event():
         if socketio:
             if not deduped:
                 try:
-                    socketio.emit('new-message', payload, broadcast=True)
+                    socketio.emit('new-message', payload)
                     logger.info('Emitted new-message via socket')
                 except TypeError:
                     socketio.emit('new-message', payload)
@@ -451,7 +648,7 @@ def webhook_event():
                         'unread_count': conversation_doc.get('unread_count', 0),
                         'customer_info': conversation_doc.get('customer_info', {}),
                         'platform': 'zalo',
-                    }, broadcast=True)
+                    })
                     logger.info('Emitted update-conversation via socket')
                 except TypeError:
                     socketio.emit('update-conversation', {
@@ -476,24 +673,716 @@ def webhook_event():
 
     return jsonify({'success': True}), 200
 
-
-def _send_message_to_zalo(access_token, to_user_id, message_text):
-    # Simplified send call — Zalo's real API may differ. For testing we mock when access_token starts with 'mock'.
-    if not access_token or str(access_token).startswith('mock'):
-        logger.info(f"Mock send to zalo: to={to_user_id}, message={message_text}")
-        return {'status': 'mocked'}
-
-    url = f"{Config.ZALO_API_BASE}/v2.0/oa/message"
-    headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
-    body = {
-        'recipient': {'user_id': to_user_id},
-        'message': {'text': message_text}
-    }
-    resp = requests.post(url, json=body, headers=headers, timeout=10)
+def _upload_image_to_zalo(access_token, image_data):
+    """
+    Upload an image to Zalo and get the attachment_id.
+    
+    Args:
+        access_token: Zalo OA access token
+        image_data: Either a URL or base64 data
+    
+    Returns:
+        str: attachment_id from Zalo, or None if failed
+    """
+    upload_url = "https://openapi.zalo.me/v2.0/oa/upload/image"
+    
     try:
-        return resp.json()
+        # Check if it's a URL or base64 data
+        if image_data.startswith('http://') or image_data.startswith('https://'):
+            # It's a URL - try HEAD first to check size before downloading
+            try:
+                head = requests.head(image_data, timeout=5, allow_redirects=True)
+                if head.status_code == 200 and head.headers.get('content-length'):
+                    try:
+                        cl = int(head.headers.get('content-length'))
+                        if cl > Config.MAX_UPLOAD_SIZE:
+                            logger.info(f"Remote image Content-Length {cl} exceeds limit {Config.MAX_UPLOAD_SIZE}: {image_data}")
+                            raise ImageTooLargeError(f"Remote image size {cl} exceeds limit {Config.MAX_UPLOAD_SIZE}")
+                    except ValueError:
+                        pass
+            except Exception:
+                # HEAD may fail for some servers; fall back to GET and then size-check
+                pass
+
+            img_response = requests.get(image_data, timeout=10)
+            if img_response.status_code != 200:
+                logger.error(f"Failed to download image from URL: {image_data}")
+                return None
+            
+            file_content = img_response.content
+            file_name = image_data.split('/')[-1].split('?')[0] or 'image.jpg'
+        else:
+            # It's base64 data
+            import base64
+            # Remove data URL prefix if present (e.g., "data:image/png;base64,")
+            if ',' in image_data:
+                image_data = image_data.split(',', 1)[1]
+            
+            file_content = base64.b64decode(image_data)
+            file_name = 'image.jpg'
+        
+        # Enforce size limit before attempting upload
+        if len(file_content) > Config.MAX_UPLOAD_SIZE:
+            logger.info(f"Image size {len(file_content)} exceeds Zalo limit ({Config.MAX_UPLOAD_SIZE}); rejecting upload.")
+            raise ImageTooLargeError(f"Image size {len(file_content)} exceeds limit {Config.MAX_UPLOAD_SIZE}")
+
+        # Upload to Zalo
+        files = {
+            'file': (file_name, file_content, 'image/jpeg')
+        }
+        headers = {
+            'access_token': access_token
+        }
+        
+        resp = requests.post(upload_url, files=files, headers=headers, timeout=30)
+        
+        if resp.status_code == 200:
+            result = resp.json()
+            data = result.get('data', {})
+            attachment_id = data.get('attachment_id')
+            
+            if attachment_id:
+                logger.info(f"Successfully uploaded image to Zalo: {attachment_id}")
+                return attachment_id
+            else:
+                logger.error(f"No attachment_id in Zalo upload response: {result}")
+                return None
+        else:
+            logger.error(f"Zalo image upload failed: {resp.status_code} - {resp.text}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error uploading image to Zalo: {e}", exc_info=True)
+        return None
+
+
+def _send_message_to_zalo(access_token, to_user_id, message_text=None, image_url=None):
+    """
+    Send a message (text and/or image) to a Zalo user.
+    
+    Args:
+        access_token: Zalo OA access token
+        to_user_id: Recipient user ID
+        message_text: Optional text message
+        image_url: Optional image URL or base64 data to send
+    
+    Returns:
+        dict: Response from Zalo API
+    """
+    # Mock mode for testing
+    if not access_token or str(access_token).startswith('mock'):
+        logger.info(f"Mock send to zalo: to={to_user_id}, message={message_text}, image={image_url}")
+        return {'status': 'mocked', 'message_id': f'mock_{secrets.token_urlsafe(8)}'}
+
+    url = "https://openapi.zalo.me/v3.0/oa/message/cs"
+    headers = {
+        'access_token': access_token,
+        'Content-Type': 'application/json'
+    }
+
+    responses = []
+    
+    # Case 1: Send text message first if provided
+    if message_text:
+        # Truncate if too long (Zalo limit is 3000 characters)
+        if len(message_text) > 2900:
+            logger.warning(f"Message text too long ({len(message_text)} chars), truncating to 2900")
+            message_text = message_text[:2900] + "..."
+        
+        text_body = {
+            'recipient': {
+                'user_id': to_user_id
+            },
+            'message': {
+                'text': message_text
+            }
+        }
+        
+        try:
+            resp = requests.post(url, json=text_body, headers=headers, timeout=10)
+            logger.info(f"Zalo text API response status: {resp.status_code}")
+            
+            if resp.status_code == 200:
+                result = resp.json()
+                logger.info(f"Successfully sent text to {to_user_id}: {result}")
+                responses.append({'type': 'text', 'response': result})
+            else:
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'text': resp.text}
+                logger.error(f"Zalo text API error: {error_data}")
+                responses.append({
+                    'type': 'text',
+                    'error': True,
+                    'status_code': resp.status_code,
+                    'response': error_data
+                })
+        except Exception as e:
+            logger.error(f"Error sending text to Zalo: {e}")
+            responses.append({'type': 'text', 'error': True, 'message': str(e)})
+    
+    # Case 2: Send image if provided
+    if image_url:
+        try:
+            # First, upload the image to Zalo to get attachment_id
+            try:
+                attachment_id = _upload_image_to_zalo(access_token, image_url)
+            except ImageTooLargeError as e:
+                logger.info(f"Image too large for Zalo: {e}")
+                responses.append({
+                    'type': 'image',
+                    'error': True,
+                    'reason': 'too_large',
+                    'message': f'Image size exceeds limit of {Config.MAX_UPLOAD_SIZE} bytes'
+                })
+                attachment_id = None
+            
+            if not attachment_id:
+                if any(r.get('reason') == 'too_large' for r in responses):
+                    # already recorded the too-large response; skip generic failure logging
+                    pass
+                else:
+                    logger.error("Failed to upload image to Zalo")
+                    responses.append({
+                        'type': 'image',
+                        'error': True,
+                        'message': 'Failed to upload image'
+                    })
+            else:
+                # Send the image using attachment_id
+                image_body = {
+                    'recipient': {
+                        'user_id': to_user_id
+                    },
+                    'message': {
+                        'attachment': {
+                            'type': 'template',
+                            'payload': {
+                                'template_type': 'media',
+                                'elements': [
+                                    {
+                                        'media_type': 'image',
+                                        'attachment_id': attachment_id
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+                
+                resp = requests.post(url, json=image_body, headers=headers, timeout=10)
+                logger.info(f"Zalo image API response status: {resp.status_code}")
+                
+                if resp.status_code == 200:
+                    result = resp.json()
+                    logger.info(f"Successfully sent image to {to_user_id}: {result}")
+                    responses.append({'type': 'image', 'response': result, 'attachment_id': attachment_id})
+                else:
+                    error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'text': resp.text}
+                    logger.error(f"Zalo image API error: {error_data}")
+                    responses.append({
+                        'type': 'image',
+                        'error': True,
+                        'status_code': resp.status_code,
+                        'response': error_data
+                    })
+        except Exception as e:
+            logger.error(f"Error sending image to Zalo: {e}", exc_info=True)
+            responses.append({'type': 'image', 'error': True, 'message': str(e)})
+    
+    # Return combined response
+    if not responses:
+        return {'error': True, 'message': 'No content to send'}
+    
+    # Check if any response succeeded
+    has_success = any(not r.get('error') for r in responses)
+    has_error = any(r.get('error') for r in responses)
+    
+    return {
+        'success': has_success,
+        'has_error': has_error,
+        'responses': responses,
+        'error': not has_success  # Overall error if nothing succeeded
+    }
+
+
+# Conversation & Message endpoints for Zalo (mirrors Facebook handlers)
+@zalo_bp.route('/api/zalo/conversations', methods=['GET'])
+def list_conversations():
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    oa_id = request.args.get('oa_id') or (request.get_json(silent=True) or {}).get('oa_id')
+    if not oa_id:
+        return jsonify({'success': False, 'message': 'oa_id is required'}), 400
+
+    try:
+        from models.conversation import ConversationModel
+        from models.customer import CustomerModel
+
+        conversation_model = ConversationModel(current_app.mongo_client)
+        customer_model = CustomerModel(current_app.mongo_client)
+
+        convs = conversation_model.find_by_oa(oa_id, limit=100)
+        logger.info(f"Found {len(convs)} conversations from new structure for oa_id {oa_id}")
+        if len(convs) == 0:
+            logger.info(f"No conversations in new structure, trying legacy method")
+            from models.message import MessageModel
+            message_model = MessageModel(current_app.mongo_client)
+            convs_legacy = message_model.get_conversations_for_oa('zalo', oa_id)
+            logger.info(f"Found {len(convs_legacy)} conversations from legacy structure")
+            convs = []
+            for c in convs_legacy:
+                sender_id = c.get('sender_id')
+                sp = c.get('sender_profile') or {}
+                name = sp.get('name') or f'User {sender_id}'
+                avatar = sp.get('avatar') or None
+                convs.append({
+                    'id': f"zalo:{oa_id}:{sender_id}",
+                    'platform': 'zalo',
+                    'oa_id': oa_id,
+                    'sender_id': sender_id,
+                    'name': name,
+                    'avatar': avatar,
+                    'lastMessage': c.get('lastMessage'),
+                    'time': c.get('time'),
+                    'unreadCount': c.get('unreadCount'),
+                })
+    except Exception as e:
+        logger.error(f"Failed to fetch conversations from new structure: {e}", exc_info=True)
+        try:
+            from models.message import MessageModel
+            message_model = MessageModel(current_app.mongo_client)
+            convs_legacy = message_model.get_conversations_for_oa('zalo', oa_id)
+            logger.info(f"Found {len(convs_legacy)} conversations from legacy structure")
+            convs = []
+            for c in convs_legacy:
+                sender_id = c.get('sender_id')
+                sp = c.get('sender_profile') or {}
+                name = sp.get('name') or f'User {sender_id}'
+                avatar = sp.get('avatar') or None
+                convs.append({
+                    'id': f"zalo:{oa_id}:{sender_id}",
+                    'platform': 'zalo',
+                    'oa_id': oa_id,
+                    'sender_id': sender_id,
+                    'name': name,
+                    'avatar': avatar,
+                    'lastMessage': c.get('lastMessage'),
+                    'time': c.get('time'),
+                    'unreadCount': c.get('unreadCount'),
+                })
+        except Exception as e2:
+            logger.error(f"Legacy fallback also failed: {e2}", exc_info=True)
+            return jsonify({'success': False, 'message': 'Internal error fetching conversations'}), 500
+
+    # Enrich with integration profile when possible
+    try:
+        model = IntegrationModel(current_app.mongo_client)
+        integration = model.find_by_platform_and_oa('zalo', oa_id)
+        # Fallback: if integration not found by top-level oa_id, try meta.profile.oa_id and backfill
+        if not integration:
+            try:
+                raw = model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+                if raw:
+                    if not raw.get('oa_id'):
+                        model.collection.update_one({'_id': raw.get('_id')}, {'$set': {'oa_id': oa_id, 'updated_at': datetime.utcnow()}})
+                    integration = model._serialize(model.collection.find_one({'_id': raw.get('_id')}))
+            except Exception:
+                integration = None
+        page_name = integration.get('name') if integration else None
+        avatar_url = integration.get('avatar_url') if integration else None
     except Exception:
-        return {'status_code': resp.status_code, 'text': resp.text}
+        page_name = None
+        avatar_url = None
+
+    out = []
+    for c in convs:
+        if 'customer_id' in c:
+            customer_id = c.get('customer_id')
+            parts = customer_id.split(':', 1)
+            sender_id = parts[1] if len(parts) > 1 else customer_id
+            customer_info = c.get('customer_info') or {}
+            name = customer_info.get('name') or f'User {sender_id}'
+            avatar = customer_info.get('avatar')
+            conv_id = f"zalo:{oa_id}:{sender_id}"
+            last_msg = c.get('last_message') or {}
+            time_value = last_msg.get('created_at')
+            if time_value:
+                try:
+                    if isinstance(time_value, str):
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(time_value.replace('Z', '+00:00'))
+                        time_value = dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    pass
+            conv_id_obj = c.get('_id')
+            if conv_id_obj and not isinstance(conv_id_obj, str):
+                conv_id_obj = str(conv_id_obj)
+            out.append({
+                'id': conv_id,
+                'conversation_id': conv_id_obj,
+                'platform': 'zalo',
+                'oa_id': oa_id,
+                'sender_id': sender_id,
+                'name': name,
+                'avatar': avatar,
+                'lastMessage': last_msg.get('text'),
+                'time': time_value or c.get('updated_at'),
+                'unreadCount': c.get('unread_count', 0),
+            })
+        else:
+            out.append(c)
+
+    logger.info(f"Returning {len(out)} conversations for oa_id {oa_id}")
+    if len(out) == 0:
+        logger.warning(f"No conversations found for oa_id {oa_id}. Check if conversations exist in DB.")
+
+    return jsonify({'success': True, 'data': out, 'page': {'name': page_name, 'avatar': avatar_url}}), 200
+
+
+@zalo_bp.route('/api/zalo/conversations/<path:conv_id>/messages', methods=['GET'])
+def get_conversation_messages(conv_id):
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'zalo':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    limit = request.args.get('limit', 100)
+    skip = request.args.get('skip', 0)
+
+    try:
+        from models.conversation import ConversationModel
+        from models.message import MessageModel
+
+        conversation_model = ConversationModel(current_app.mongo_client)
+        message_model = MessageModel(current_app.mongo_client)
+
+        customer_id = f"zalo:{sender_id}"
+
+        # First attempt: find by oa_id + customer_id
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        # Fallback: if not found (or oa_id empty/null), try finding by customer_id only
+        if not conversation_doc:
+            raw = conversation_model.collection.find_one({'customer_id': customer_id})
+            if raw:
+                logger.info(f"Found conversation by customer_id fallback for {customer_id}")
+                conversation_doc = raw
+                # If oa_id in raw is not set but conv_id's oa_id is provided and looks like a real id (not 'null' string), set it
+                try:
+                    if (not conversation_doc.get('oa_id')) and oa_id and oa_id.lower() not in ['null', 'none', '']:
+                        conversation_model.collection.update_one({'_id': conversation_doc.get('_id')}, {'$set': {'oa_id': oa_id, 'updated_at': datetime.utcnow()}})
+                        conversation_doc = conversation_model.collection.find_one({'_id': conversation_doc.get('_id')})
+                except Exception:
+                    pass
+
+        conversation_id = conversation_doc.get('_id') if conversation_doc else None
+        if conversation_id and not isinstance(conversation_id, str):
+            try:
+                conversation_id = str(conversation_id)
+            except Exception:
+                conversation_id = None
+
+        msgs = message_model.get_messages(
+            platform, oa_id, sender_id,
+            limit=limit, skip=skip,
+            conversation_id=conversation_id
+        )
+        logger.info(f"Retrieved {len(msgs)} messages for conversation {conv_id}")
+    except Exception as e:
+        logger.error(f"Failed to fetch messages: {e}")
+        return jsonify({'success': False, 'message': 'Internal error fetching messages'}), 500
+
+    try:
+        return jsonify({'success': True, 'data': msgs}), 200
+    except TypeError as e:
+        logger.warning(f"Messages not JSON serializable, attempting to normalize: {e}")
+        try:
+            import json
+            safe_msgs = json.loads(json.dumps(msgs, default=str))
+            return jsonify({'success': True, 'data': safe_msgs}), 200
+        except Exception as e2:
+            logger.error(f"Failed to normalize messages for JSON response: {e2}")
+            return jsonify({'success': False, 'message': 'Internal error formatting messages'}), 500
+
+
+@zalo_bp.route('/api/zalo/conversations/<path:conv_id>/mark-read', methods=['POST'])
+def mark_conversation_read(conv_id):
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'zalo':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    model = IntegrationModel(current_app.mongo_client)
+    integration = model.find_by_platform_and_oa(platform, oa_id)
+    if not integration or integration.get('accountId') != account_id:
+        return jsonify({'success': False, 'message': 'Not authorized or integration not found'}), 403
+
+    try:
+        from models.conversation import ConversationModel
+        from models.message import MessageModel
+
+        conversation_model = ConversationModel(current_app.mongo_client)
+        message_model = MessageModel(current_app.mongo_client)
+
+        customer_id = f"zalo:{sender_id}"
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        conversation_id = conversation_doc.get('_id') if conversation_doc else None
+
+        if conversation_doc:
+            conversation_model.mark_read(oa_id, customer_id)
+
+        modified = message_model.mark_read(platform, oa_id, sender_id, conversation_id=conversation_id)
+        return jsonify({'success': True, 'updated': modified}), 200
+    except Exception as e:
+        logger.error(f"Failed to mark conversation read: {e}")
+        return jsonify({'success': False, 'message': 'Internal error'}), 500
+
+
+@zalo_bp.route('/api/zalo/conversations/<path:conv_id>/messages', methods=['POST'])
+def send_conversation_message(conv_id):
+    """
+    Send a message (text and/or image) to a Zalo conversation.
+    
+    Request body:
+        {
+            "text": "optional text message",
+            "image": "optional image URL or base64 data"
+        }
+    """
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'zalo':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    data = request.get_json() or {}
+    text = data.get('text')
+    image = data.get('image')
+    
+    if not text and not image:
+        return jsonify({'success': False, 'message': 'text or image is required'}), 400
+
+    # ===== EARLY VALIDATION: Check image size BEFORE doing anything =====
+    if image:
+        try:
+            if image.startswith('http://') or image.startswith('https://'):
+                # Check remote image size via HEAD request
+                try:
+                    head = requests.head(image, timeout=5, allow_redirects=True)
+                    if head.status_code == 200 and head.headers.get('content-length'):
+                        content_length = int(head.headers.get('content-length'))
+                        if content_length > Config.MAX_UPLOAD_SIZE:
+                            logger.info(f"Image too large: {content_length} bytes (limit: {Config.MAX_UPLOAD_SIZE})")
+                            return jsonify({
+                                'success': False,
+                                'error_code': 'IMAGE_TOO_LARGE',
+                                'message': 'Image must be less than 1MB'
+                            }), 413
+                except requests.RequestException:
+                    # If HEAD fails, try GET but check size
+                    img_response = requests.get(image, timeout=10, stream=True)
+                    # Read first chunk to check size
+                    content_length = img_response.headers.get('content-length')
+                    if content_length and int(content_length) > Config.MAX_UPLOAD_SIZE:
+                        logger.info(f"Image too large: {content_length} bytes (limit: {Config.MAX_UPLOAD_SIZE})")
+                        return jsonify({
+                            'success': False,
+                            'error_code': 'IMAGE_TOO_LARGE',
+                            'message': 'Image must be less than 1MB'
+                        }), 413
+            else:
+                # Base64 data - check decoded size
+                import base64
+                if ',' in image:
+                    image_data = image.split(',', 1)[1]
+                else:
+                    image_data = image
+                
+                file_content = base64.b64decode(image_data)
+                if len(file_content) > Config.MAX_UPLOAD_SIZE:
+                    logger.info(f"Image too large: {len(file_content)} bytes (limit: {Config.MAX_UPLOAD_SIZE})")
+                    return jsonify({
+                        'success': False,
+                        'error_code': 'IMAGE_TOO_LARGE',
+                        'message': 'Image must be less than 1MB'
+                    }), 413
+        except Exception as e:
+            logger.error(f"Error validating image size: {e}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'message': 'Failed to validate image'
+            }), 400
+    # ===== END EARLY VALIDATION =====
+
+    model = IntegrationModel(current_app.mongo_client)
+    integration = model.find_by_platform_and_oa(platform, oa_id)
+    if not integration or integration.get('accountId') != account_id:
+        return jsonify({'success': False, 'message': 'Not authorized or integration not found'}), 403
+
+    try:
+        from models.customer import CustomerModel
+        from models.conversation import ConversationModel
+        from models.message import MessageModel
+
+        customer_model = CustomerModel(current_app.mongo_client)
+        conversation_model = ConversationModel(current_app.mongo_client)
+        message_model = MessageModel(current_app.mongo_client)
+
+        customer_id = f"zalo:{sender_id}"
+        customer_doc = customer_model.find_by_id(customer_id)
+        if not customer_doc:
+            customer_doc = customer_model.upsert_customer(platform='zalo', platform_specific_id=sender_id)
+
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        if not conversation_doc:
+            conversation_doc = conversation_model.upsert_conversation(oa_id=oa_id, customer_id=customer_id)
+
+        conversation_id = conversation_doc.get('_id')
+        if conversation_id and not isinstance(conversation_id, str):
+            try:
+                conversation_id = str(conversation_id)
+            except Exception:
+                conversation_id = None
+
+        conv_id = f"{platform}:{oa_id}:{sender_id}"
+
+        # Send to Zalo - now we know image is valid size
+        send_resp = _send_message_to_zalo(
+            integration.get('access_token'), 
+            sender_id, 
+            message_text=text, 
+            image_url=image
+        )
+        
+        # This check should now never trigger for size issues
+        # But keep it as a safety net for other errors
+        if send_resp.get('error') and not send_resp.get('success'):
+            logger.error(f"Failed to send message to Zalo: {send_resp}")
+            return jsonify({
+                'success': False, 
+                'message': 'Failed to send message to Zalo',
+                'error': send_resp
+            }), 500
+
+        # Determine message display text
+        display_text = text if text else None
+        if image and not text:
+            display_text = "Tệp đính kèm"
+        elif image and text:
+            display_text = f"{text}"
+
+        # Update conversation
+        conversation_model.upsert_conversation(
+            oa_id=oa_id,
+            customer_id=customer_id,
+            last_message_text=display_text,
+            last_message_created_at=datetime.utcnow(),
+            direction='out',
+        )
+
+        # Prepare metadata
+        page_profile = {
+            'name': integration.get('name'), 
+            'avatar': integration.get('avatar_url')
+        }
+        metadata = {
+            'send_response': send_resp, 
+            'page_profile': page_profile
+        }
+        if image:
+            metadata['image'] = image
+            metadata['has_attachment'] = True
+            metadata['attachment_type'] = 'image'
+            for resp in send_resp.get('responses', []):
+                if resp.get('type') == 'image' and resp.get('attachment_id'):
+                    metadata['attachment_id'] = resp.get('attachment_id')
+
+        # Save message to database
+        sent_doc = message_model.add_message(
+            platform=platform,
+            oa_id=oa_id,
+            sender_id=sender_id,
+            direction='out',
+            text=display_text,
+            metadata=metadata,
+            is_read=True,
+            conversation_id=conversation_id,
+        )
+
+        recipient_profile = {
+            'name': customer_doc.get('name') if customer_doc else None, 
+            'avatar': customer_doc.get('avatar') if customer_doc else None
+        }
+
+        # Emit socket events
+        try:
+            socketio = getattr(current_app, 'socketio', None)
+            if socketio:
+                message_payload = {
+                    'platform': platform,
+                    'oa_id': oa_id,
+                    'sender_id': sender_id,
+                    'message': display_text,
+                    'message_doc': sent_doc,
+                    'conv_id': conv_id,
+                    'conversation_id': conversation_id,
+                    'direction': 'out',
+                    'sent_at': datetime.utcnow().isoformat() + 'Z',
+                    'sender_profile': page_profile,
+                    'recipient_profile': recipient_profile,
+                }
+                
+                if image:
+                    message_payload['image'] = image
+                    message_payload['has_attachment'] = True
+                
+                socketio.emit('new-message', message_payload)
+
+                socketio.emit('update-conversation', {
+                    'conversation_id': conversation_id,
+                    'conv_id': conv_id,
+                    'oa_id': oa_id,
+                    'customer_id': customer_id,
+                    'last_message': {
+                        'text': display_text,
+                        'created_at': datetime.utcnow().isoformat() + 'Z',
+                    },
+                    'unread_count': conversation_doc.get('unread_count', 0),
+                    'customer_info': conversation_doc.get('customer_info', {}),
+                    'platform': 'zalo',
+                })
+                logger.info(f"Emitted socket events for outgoing message with image: {bool(image)}")
+        except Exception as e:
+            logger.error(f"Failed to emit socket event for outgoing message: {e}")
+
+        return jsonify({
+            'success': True, 
+            'data': {
+                'sent': sent_doc, 
+                'send_response': send_resp,
+                'has_image': bool(image)
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to send conversation message: {e}", exc_info=True)
+        return jsonify({
+            'success': False, 
+            'message': f'Failed to send message: {str(e)}'
+        }), 500
 
 
 # Token refresh helper (can be used by scheduler)

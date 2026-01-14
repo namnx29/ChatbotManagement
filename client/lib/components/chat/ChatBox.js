@@ -86,6 +86,17 @@ export default function ChatBox({ conversation, onSendMessage }) {
 		}
 	};
 
+	const normalizeMessageText = (msg) => {
+		if (msg.text && msg.text.trim() !== '') return msg.text;
+
+		if (msg.type && msg.type !== 'text') {
+			return '📎 Tệp này không được hỗ trợ';
+		}
+
+		return '📎 Tệp này không được hỗ trợ';
+	};
+
+
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
 			{/* Header */}
@@ -221,7 +232,7 @@ export default function ChatBox({ conversation, onSendMessage }) {
 												: '0 1px 2px rgba(0,0,0,0.05)',
 									}}
 								>
-									{msg.text}
+									{normalizeMessageText(msg)}
 								</div>
 							)}
 							<span

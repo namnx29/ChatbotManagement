@@ -1,6 +1,6 @@
 'use client';
 
-import { Layout, Input, Select, Button } from 'antd';
+import { Layout, Input, Select, Button, App } from 'antd';
 import {
   SearchOutlined,
   DownOutlined,
@@ -12,10 +12,15 @@ import { io } from 'socket.io-client';
 import {
   listIntegrations,
   listFacebookConversations,
+  listZaloConversations,
   getConversationMessages,
+  getZaloConversationMessages,
   sendConversationMessage,
   sendConversationAttachment,
-  markConversationRead
+  sendZaloConversationMessage,
+  sendZaloConversationAttachment,
+  markConversationRead,
+  markZaloConversationRead
 } from '@/lib/api';
 import ChatBox from '@/lib/components/chat/ChatBox';
 import ConversationItem from '@/lib/components/chat/ConversationItem';
@@ -24,11 +29,10 @@ import FilterModal from '@/lib/components/popup/FilterModal';
 const { Sider, Content } = Layout;
 
 // Constants
-const SOCKET_URL = "https://nicola-unstagnant-limpidly.ngrok-free.dev";
+const SOCKET_URL = "https://elcom.vn";
 const SOCKET_CONFIG = {
-  transports: ['polling', 'websocket'],
+  transports: ['websocket', 'polling'],
   withCredentials: true,
-  extraHeaders: { "ngrok-skip-browser-warning": "69420" }
 };
 const MESSAGE_TIMEOUT = 5000;
 const MESSAGE_LIMIT = 50;
@@ -43,6 +47,7 @@ const FILTER_OPTIONS = [
 ];
 
 export default function ChatManagementPage() {
+  const { message } = App.useApp();
   // State
   const [selectedChat, setSelectedChat] = useState(null);
   const [filterChannel, setFilterChannel] = useState('all');
@@ -215,7 +220,6 @@ export default function ChatManagementPage() {
 
           // Check if message already exists
           if (prev.messages?.some(m => m.id === newMsgClient.id)) {
-            console.log('Message already exists, skipping');
             return prev;
           }
 
@@ -226,24 +230,34 @@ export default function ChatManagementPage() {
               const isMatchingTemp =
                 !foundTemp &&
                 m.pending &&
-                (m.text || '').trim() === (newMsgClient.text || '').trim() &&
-                (!!m.image === !!newMsgClient.image);
+                (
+                  (!!m.image && !!newMsgClient.image) ||
+                  ((m.text || '').trim() === (newMsgClient.text || '').trim())
+                );
 
               if (isMatchingTemp) {
                 foundTemp = true;
                 clearPendingTimeout(m.id);
+                if (m.image && !newMsgClient.image) {
+                  try {
+                    message.error('Hình ảnh không thể gửi được');
+                  } catch (e) {
+                    console.error('Failed to show image failure notification:', e);
+                  }
+                }
+
                 return {
                   ...newMsgClient,
                   pending: false,
                   failed: false,
-                  image: newMsgClient.image || m.image,
+                  // Respect the server-provided image. If server didn't include it, do not keep the optimistic image.
+                  image: newMsgClient.image || null,
                 };
               }
               return m;
             });
 
             if (!foundTemp) {
-              console.log('No matching temp message found, appending');
               return {
                 ...prev,
                 messages: [...updatedMessages, newMsgClient]
@@ -276,23 +290,43 @@ export default function ChatManagementPage() {
 
       try {
         setLoading(true);
-        const result = await listIntegrations(accountId, 'facebook');
+        const result = await listIntegrations(accountId);
         const integrations = result?.data || [];
 
         const conversationPromises = integrations.map(async (integration) => {
           try {
-            const res = await listFacebookConversations(accountId, integration.oa_id);
-            return (res?.data || []).map(c => ({
-              id: c.id,
-              name: c.name,
-              avatar: c.avatar || integration.avatar_url,
-              platform: 'facebook',
-              lastMessage: c.lastMessage,
-              time: c.time,
-              isUnread: (c.unreadCount || 0) > 0,
-              messages: [],
-              oa_id: integration.oa_id,
-            }));
+            if (integration.platform === 'facebook') {
+              const res = await listFacebookConversations(accountId, integration.oa_id);
+              return (res?.data || []).map(c => ({
+                id: c.id,
+                name: c.name,
+                avatar: c.avatar || integration.avatar_url,
+                platform: 'facebook',
+                lastMessage: c.lastMessage,
+                time: c.time,
+                isUnread: (c.unreadCount || 0) > 0,
+                messages: [],
+                oa_id: integration.oa_id,
+              }));
+            }
+
+            if (integration.platform === 'zalo') {
+              const res = await listZaloConversations(accountId, integration.oa_id);
+              return (res?.data || []).map(c => ({
+                id: c.id,
+                name: c.name,
+                avatar: c.avatar || integration.avatar_url,
+                platform: 'zalo',
+                lastMessage: c.lastMessage,
+                time: c.time,
+                isUnread: (c.unreadCount || 0) > 0,
+                messages: [],
+                oa_id: integration.oa_id,
+              }));
+            }
+
+            // Unsupported platform or no conversation loader defined
+            return [];
           } catch (error) {
             console.error(`Failed to load conversations for ${integration.oa_id}:`, error);
             return [];
@@ -326,9 +360,13 @@ export default function ChatManagementPage() {
     setSelectedChat({ ...conversation, loadingMessages: true });
 
     try {
-      const res = await getConversationMessages(accountId, conversation.id, {
-        limit: MESSAGE_LIMIT
-      });
+      let res;
+      if (conversation.platform === 'zalo') {
+        res = await getZaloConversationMessages(accountId, conversation.id, { limit: MESSAGE_LIMIT });
+      } else {
+        res = await getConversationMessages(accountId, conversation.id, { limit: MESSAGE_LIMIT });
+      }
+
       const msgs = (res?.data || []).map(mapMessageDocToClient);
 
       // Mark as read in sidebar
@@ -344,7 +382,11 @@ export default function ChatManagementPage() {
       localStorage.setItem('lastSelectedConversation', conversation.id);
 
       // Mark as read on server
-      await markConversationRead(accountId, conversation.id);
+      if (conversation.platform === 'zalo') {
+        await markZaloConversationRead(accountId, conversation.id);
+      } else {
+        await markConversationRead(accountId, conversation.id);
+      }
     } catch (error) {
       console.error('Failed to load messages:', error);
       setSelectedChat({
@@ -412,28 +454,59 @@ export default function ChatManagementPage() {
     pendingTimeoutsRef.current.set(tempId, timeoutId);
 
     try {
-      // Send to API
-      if (newMessage.image) {
-        await sendConversationAttachment(
-          accountId,
-          selectedChat.id,
-          newMessage.image,
-          newMessage.text || null
-        );
+      // Send to API (platform-specific)
+      if (selectedChat.platform === 'zalo') {
+        if (newMessage.image) {
+          await sendZaloConversationAttachment(accountId, selectedChat.id, newMessage.image, newMessage.text || null);
+        } else {
+          await sendZaloConversationMessage(accountId, selectedChat.id, newMessage.text);
+        }
       } else {
-        await sendConversationMessage(
-          accountId,
-          selectedChat.id,
-          newMessage.text
-        );
+        if (newMessage.image) {
+          await sendConversationAttachment(
+            accountId,
+            selectedChat.id,
+            newMessage.image,
+            newMessage.text || null
+          );
+        } else {
+          await sendConversationMessage(
+            accountId,
+            selectedChat.id,
+            newMessage.text
+          );
+        }
       }
 
-      console.log('Message sent successfully, waiting for socket confirmation');
     } catch (error) {
       console.error('Send message failed:', error);
 
       // Clear timeout and mark as failed
       clearPendingTimeout(tempId);
+
+      const isImageTooLarge = (error && (error.status === 413 || (error.body && error.body.error_code === 'IMAGE_TOO_LARGE') || (error.message && error.message.toLowerCase().includes('image must be less'))));
+
+      if (isImageTooLarge) {
+        // Remove the optimistic temp message
+        setSelectedChat(prev => {
+          if (!prev) return prev;
+          return { ...prev, messages: (prev.messages || []).filter(m => m.id !== tempId) };
+        });
+
+        // Revert sidebar lastMessage/time to previous value
+        const conv = conversations.find(c => c.id === selectedChat.id);
+        const prevLast = conv ? conv.lastMessage : '';
+        updateConversationInList(selectedChat.id, { lastMessage: prevLast, time: new Date().toISOString() });
+
+        // Notify user
+        try {
+          message.error((error && (error.body && error.body.message)) || error.message || 'Hình ảnh vượt quá kích thước cho phép (1MB)');
+        } catch (e) {
+          console.error('Failed to show message notification:', e);
+        }
+
+        return;
+      }
 
       setSelectedChat(prev => ({
         ...prev,

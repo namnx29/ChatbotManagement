@@ -3,7 +3,7 @@
  * Centralized API caller for backend communication
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
 /**
  * Get the full avatar URL from relative path
@@ -69,7 +69,6 @@ export async function apiCall(method, endpoint, data = null) {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true',
       },
     };
 
@@ -83,7 +82,10 @@ export async function apiCall(method, endpoint, data = null) {
     const result = await parseResponse(response);
 
     if (!response.ok) {
-      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+      const error = new Error(result.message || `HTTP ${response.status}`);
+      error.info = result;
+      error.status = response.status;
+      throw error;
     }
 
     return result;
@@ -168,7 +170,6 @@ export async function fetchProfile(accountId) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
-        'ngrok-skip-browser-warning': 'true',
       },
     };
 
@@ -230,7 +231,7 @@ export async function uploadAvatar(accountId, file) {
 export async function changeName(accountId, data) {
   try {
     const newName = data.newName;
-    
+
     const config = {
       method: 'POST',
       headers: {
@@ -335,7 +336,6 @@ export async function listChatbots(accountId) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
-        'ngrok-skip-browser-warning': 'true',
       },
     });
 
@@ -366,7 +366,6 @@ export async function listIntegrations(accountId, platform = null) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
-        'ngrok-skip-browser-warning': 'true',
       },
     });
 
@@ -400,7 +399,6 @@ export async function listFacebookConversations(accountId, oa_id) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
-        'ngrok-skip-browser-warning': 'true',
       },
     });
 
@@ -436,7 +434,6 @@ export async function getConversationMessages(accountId, convId, opts = {}) {
       headers: {
         'Content-Type': 'application/json',
         'X-Account-Id': accountId,
-        'ngrok-skip-browser-warning': '69420',
       },
     });
 
@@ -524,6 +521,138 @@ export async function sendConversationAttachment(accountId, convId, imageData, t
     return result;
   } catch (error) {
     console.error('API Error [POST /facebook/conversations/:id/messages (attachment)]:', error);
+    throw error;
+  }
+}
+
+/**
+ * Zalo equivalents
+ */
+export async function listZaloConversations(accountId, oa_id) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const url = new URL(`${API_BASE_URL}/api/zalo/conversations`);
+    url.searchParams.append('oa_id', oa_id);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': 'true',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('listZaloConversations error response:', errorText);
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await parseResponse(response);
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /zalo/conversations]:', error);
+    throw error;
+  }
+}
+
+export async function getZaloConversationMessages(accountId, convId, opts = {}) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const url = new URL(`${API_BASE_URL}/api/zalo/conversations/${encodeURIComponent(convId)}/messages`);
+    if (opts.limit) url.searchParams.append('limit', opts.limit);
+    if (opts.skip) url.searchParams.append('skip', opts.skip);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /zalo/conversations/:id/messages]:', error);
+    throw error;
+  }
+}
+
+export async function markZaloConversationRead(accountId, convId) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/zalo/conversations/${encodeURIComponent(convId)}/mark-read`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+    });
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /zalo/conversations/:id/mark-read]:', error);
+    throw error;
+  }
+}
+
+export async function sendZaloConversationMessage(accountId, convId, text) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/zalo/conversations/${encodeURIComponent(convId)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ text }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      const err = new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+      err.status = response.status;
+      err.body = result;
+      throw err;
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /zalo/conversations/:id/messages]:', error);
+    throw error;
+  }
+}
+
+export async function sendZaloConversationAttachment(accountId, convId, imageData, text = null) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/zalo/conversations/${encodeURIComponent(convId)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ image: imageData, text }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      const err = new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+      err.status = response.status;
+      err.body = result;
+      throw err;
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /zalo/conversations/:id/messages (attachment)]:', error);
     throw error;
   }
 }

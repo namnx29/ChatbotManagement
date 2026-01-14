@@ -136,7 +136,24 @@ class MessageModel:
     def get_messages(self, platform, oa_id, sender_id, limit=50, skip=0, conversation_id=None):
         """
         Get messages. If conversation_id is provided, use it; otherwise use legacy sender_id.
+
+        Pagination behavior (new):
+        - Query is performed with created_at DESC so the newest messages are returned first.
+        - We apply skip and limit on that newest-first ordering to allow "skip" to move the window
+          further back in time (i.e., to older messages) for lazy-loading.
+        - Before returning, we reverse each page so the consumer receives messages in chronological
+          order (oldest -> newest) for that page, which makes it trivial to append/prepend in the UI.
         """
+        # Normalize pagination params
+        try:
+            limit = max(int(limit), 0)
+        except Exception:
+            limit = 50
+        try:
+            skip = max(int(skip), 0)
+        except Exception:
+            skip = 0
+
         if conversation_id:
             try:
                 # Handle both string and ObjectId formats
@@ -149,8 +166,13 @@ class MessageModel:
                 q = {'conversation_id': conversation_id}
         else:
             q = {'platform': platform, 'oa_id': oa_id, 'sender_id': sender_id}
-        cursor = self.collection.find(q).sort('created_at', 1).skip(int(skip)).limit(int(limit))
+
+        # Query newest-first so skip moves the window to older messages
+        cursor = self.collection.find(q).sort('created_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]
+
+        # Reverse so client gets chronological order (oldest -> newest) within this page
+        docs.reverse()
         return docs
 
     def mark_read(self, platform, oa_id, sender_id, conversation_id=None):

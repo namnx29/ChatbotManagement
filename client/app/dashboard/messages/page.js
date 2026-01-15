@@ -25,6 +25,7 @@ import {
 import ChatBox from '@/lib/components/chat/ChatBox';
 import ConversationItem from '@/lib/components/chat/ConversationItem';
 import FilterModal from '@/lib/components/popup/FilterModal';
+import { useNotification } from '@/lib/context/NotificationContext';
 
 const { Sider, Content } = Layout;
 
@@ -35,8 +36,7 @@ const SOCKET_CONFIG = {
   withCredentials: true,
 };
 const MESSAGE_TIMEOUT = 5000;
-// Use 20 per page for chat lazy-loading as requested
-const MESSAGE_LIMIT = 20;
+const MESSAGE_LIMIT = 10;
 const MAX_CONVERSATIONS = 2000;
 
 // Filter options configuration
@@ -49,6 +49,7 @@ const FILTER_OPTIONS = [
 
 export default function ChatManagementPage() {
   const { message } = App.useApp();
+  const { updateUnreadCount } = useNotification();
   // State
   const [selectedChat, setSelectedChat] = useState(null);
   const [filterChannel, setFilterChannel] = useState('all');
@@ -163,10 +164,6 @@ export default function ChatManagementPage() {
     socket.off('new-message');
 
     const handleNewMessage = (payload) => {
-      if (payload.direction === 'in') {
-        playNotificationSound();
-        showPushNotification(payload);
-      }
       const convId = payload.conv_id;
       const newMsgClient = payload.message_doc ? mapMessageDocToClient(payload.message_doc) : null;
 
@@ -280,6 +277,7 @@ export default function ChatManagementPage() {
           (async () => {
             try {
               updateConversationInList(convId, { isUnread: false });
+              window.dispatchEvent(new CustomEvent('reset-conversation-unread', { detail: { conversations: convId } }));
               if (payload.platform === 'zalo') {
                 await markZaloConversationRead(accountId, convId);
               } else {
@@ -395,7 +393,6 @@ export default function ChatManagementPage() {
       // Mark as read in sidebar
       updateConversationInList(conversation.id, { isUnread: false });
 
-      // Prepare pagination metadata for the selected chat
       setSelectedChat({
         ...conversation,
         messages: msgs,
@@ -415,6 +412,9 @@ export default function ChatManagementPage() {
       } else {
         await markConversationRead(accountId, conversation.id);
       }
+      window.dispatchEvent(new CustomEvent('reset-conversation-unread', {
+        detail: { conversationId: conversation.id }
+      }));
     } catch (error) {
       console.error('Failed to load messages:', error);
       setSelectedChat({
@@ -663,41 +663,6 @@ export default function ChatManagementPage() {
       </p>
     </div>
   ), []);
-
-  useEffect(() => {
-    const unreadCount = conversations.reduce((acc, conv) => acc + (conv.isUnread ? 1 : 0), 0);
-
-    if (unreadCount > 0) {
-      document.title = `(${unreadCount}) Tin nhắn mới - Quản lý Chat`;
-    } else {
-      document.title = `Quản lý Chat`;
-    }
-  }, [conversations]);
-
-  const playNotificationSound = () => {
-    const audio = new Audio('/notification-sound.mp3');
-    audio.play().catch(e => console.log("Trình duyệt chặn tự động phát âm thanh:", e));
-  };
-
-  useEffect(() => {
-    if ("Notification" in window) {
-      Notification.requestPermission();
-    }
-  }, []);
-
-  const showPushNotification = (payload) => {
-    if (Notification.permission === "granted" && document.hidden) {
-      const notification = new Notification(payload.sender_profile?.name || "Tin nhắn mới", {
-        body: payload.message,
-        icon: payload.sender_profile?.avatar || "/logo.png",
-      });
-
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
-      };
-    }
-  };
 
   return (
     <Layout style={{ background: '#f0f2f5', height: 100 }}>

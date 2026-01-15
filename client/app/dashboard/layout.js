@@ -9,6 +9,7 @@ import {
   Progress,
   Badge,
   Spin,
+  Typography
 } from "antd";
 import {
   UserOutlined,
@@ -31,12 +32,15 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { getAvatarUrl } from "@/lib/api";
 import TrialBanner from "@/lib/components/popup/TrialBanner";
+import { NotificationProvider, useNotification } from "@/lib/context/NotificationContext";
 
 const { Header, Sider, Content } = Layout;
+const { Title, Text } = Typography;
 
 const MOBILE_BREAKPOINT = 768;
 
-export default function DashboardLayout({ children }) {
+function DashboardLayoutContent({ children }) {
+  const { hasUnread } = useNotification();
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
@@ -154,7 +158,22 @@ export default function DashboardLayout({ children }) {
     {
       key: "/dashboard/messages",
       icon: <MessageOutlined />,
-      label: "Quản lý tin nhắn",
+      label: (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+          <span>Quản lý tin nhắn</span>
+          {hasUnread && (
+            <div
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#ff4d4f',
+                marginLeft: '8px',
+              }}
+            />
+          )}
+        </div>
+      ),
     },
     {
       key: "/dashboard/statistics",
@@ -433,11 +452,12 @@ export default function DashboardLayout({ children }) {
 
                 {!collapsed && (
                   <div style={{ flex: 1 }}>
-                    <div
-                      style={{ color: "white", fontSize: 13, marginBottom: 4 }}
+                    <Text
+                      style={{ maxWidth: 150, color: "white", marginBottom: 4 }}
+                      ellipsis={{ tooltip: {userName} }} 
                     >
                       {userName}
-                    </div>
+                    </Text>
 
                     <div
                       style={{
@@ -545,5 +565,13 @@ export default function DashboardLayout({ children }) {
         </Layout>
       </Layout>
     </>
+  );
+}
+
+export default function DashboardLayout({ children }) {
+  return (
+    <NotificationProvider>
+      <DashboardLayoutContent>{children}</DashboardLayoutContent>
+    </NotificationProvider>
   );
 }

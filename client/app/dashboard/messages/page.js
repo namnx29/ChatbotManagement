@@ -49,7 +49,7 @@ const FILTER_OPTIONS = [
 
 export default function ChatManagementPage() {
   const { message } = App.useApp();
-  const { updateUnreadCount } = useNotification();
+  const { updateUnreadCount, setActiveConversation, clearActiveConversation } = useNotification();
   // State
   const [selectedChat, setSelectedChat] = useState(null);
   const [filterChannel, setFilterChannel] = useState('all');
@@ -378,6 +378,8 @@ export default function ChatManagementPage() {
 
   // Handle chat selection
   const handleSelectChat = useCallback(async (conversation) => {
+    // Set this conversation as active so notifications don't trigger for it
+    setActiveConversation(conversation.id);
     setSelectedChat({ ...conversation, loadingMessages: true });
 
     try {
@@ -427,7 +429,7 @@ export default function ChatManagementPage() {
         hasMore: false,
       });
     }
-  }, [accountId, mapMessageDocToClient, updateConversationInList]);
+  }, [accountId, mapMessageDocToClient, updateConversationInList, setActiveConversation]);
 
   // Handler to load older messages (lazy-load / infinite scroll)
   const handleLoadMoreMessages = useCallback(async () => {
@@ -463,6 +465,14 @@ export default function ChatManagementPage() {
       return [];
     }
   }, [selectedChat, accountId, mapMessageDocToClient]);
+
+  // Effect to manage active conversation state
+  useEffect(() => {
+    return () => {
+      // Clear active conversation when page unmounts
+      clearActiveConversation();
+    };
+  }, [clearActiveConversation]);
 
   // Handle sending messages
   const handleSendMessage = useCallback(async (newMessage) => {

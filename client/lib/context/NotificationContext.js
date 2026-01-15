@@ -16,6 +16,7 @@ export function NotificationProvider({ children }) {
   const [hasUnread, setHasUnread] = useState(false);
   const socketRef = useRef(null);
   const conversationUnreadCountsRef = useRef({});
+  const currentActiveConversationRef = useRef(null);
 
   const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
 
@@ -59,6 +60,16 @@ export function NotificationProvider({ children }) {
     }
   }, []);
 
+  // Set active conversation (called when user opens a conversation)
+  const setActiveConversation = useCallback((conversationId) => {
+    currentActiveConversationRef.current = conversationId;
+  }, []);
+
+  // Clear active conversation (called when user closes/switches away from conversation)
+  const clearActiveConversation = useCallback(() => {
+    currentActiveConversationRef.current = null;
+  }, []);
+
   // Initialize socket connection and setup message listener
   useEffect(() => {
     if (!accountId) return;
@@ -69,20 +80,25 @@ export function NotificationProvider({ children }) {
     // Setup new message listener
     const handleNewMessage = (payload) => {
       if (payload.direction === 'in') {
-        playNotificationSound();
-        showPushNotification(payload);
-        
         const convId = payload.conv_id;
-        
-        // Update conversation-level unread count
-        if (!conversationUnreadCountsRef.current[convId]) {
-          conversationUnreadCountsRef.current[convId] = 0;
+        const isCurrentActiveConversation = currentActiveConversationRef.current === convId;
+
+        // Only show notification if message is not from the active conversation
+        if (!isCurrentActiveConversation) {
+          playNotificationSound();
+          showPushNotification(payload);
+          
+          // Update conversation-level unread count
+          if (!conversationUnreadCountsRef.current[convId]) {
+            conversationUnreadCountsRef.current[convId] = 0;
+          }
+          conversationUnreadCountsRef.current[convId]++;
+          
+          // Calculate total unread and update title
+          const totalUnread = Object.values(conversationUnreadCountsRef.current).reduce((a, b) => a + b, 0);
+          updateUnreadCount(totalUnread);
         }
-        conversationUnreadCountsRef.current[convId]++;
-        
-        // Calculate total unread
-        const totalUnread = Object.values(conversationUnreadCountsRef.current).reduce((a, b) => a + b, 0);
-        updateUnreadCount(totalUnread);
+        // If message is from the active conversation, don't show notification or increment unread
       }
     };
 
@@ -120,6 +136,8 @@ export function NotificationProvider({ children }) {
     playNotificationSound,
     showPushNotification,
     socketRef,
+    setActiveConversation,
+    clearActiveConversation,
   };
 
   return (

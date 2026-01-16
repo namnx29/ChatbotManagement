@@ -547,7 +547,6 @@ def webhook_event():
     except Exception:
         customer_info = {}
 
-    # Determine preview for last message: if message text is empty but payload contains attachments/images, show attachment label
     preview_text = message
     try:
         if not preview_text:
@@ -563,7 +562,7 @@ def webhook_event():
         oa_id=resolved_oa_id,
         customer_id=customer_id,
         last_message_text=preview_text,
-        last_message_created_at=datetime.utcnow() if preview_text else None,
+        last_message_created_at=datetime.utcnow(),
         direction=direction,
         customer_info=customer_info if customer_info else None,
         increment_unread=(direction == 'in'),
@@ -946,7 +945,7 @@ def list_conversations():
             for c in convs_legacy:
                 sender_id = c.get('sender_id')
                 sp = c.get('sender_profile') or {}
-                name = sp.get('name') or f'User {sender_id}'
+                name = sp.get('name') or None
                 avatar = sp.get('avatar') or None
                 convs.append({
                     'id': f"zalo:{oa_id}:{sender_id}",
@@ -970,7 +969,7 @@ def list_conversations():
             for c in convs_legacy:
                 sender_id = c.get('sender_id')
                 sp = c.get('sender_profile') or {}
-                name = sp.get('name') or f'User {sender_id}'
+                name = sp.get('name') or None
                 avatar = sp.get('avatar') or None
                 convs.append({
                     'id': f"zalo:{oa_id}:{sender_id}",
@@ -1014,7 +1013,7 @@ def list_conversations():
             parts = customer_id.split(':', 1)
             sender_id = parts[1] if len(parts) > 1 else customer_id
             customer_info = c.get('customer_info') or {}
-            name = customer_info.get('name') or f'User {sender_id}'
+            name = customer_info.get('name') or None
             avatar = customer_info.get('avatar')
             conv_id = f"zalo:{oa_id}:{sender_id}"
             last_msg = c.get('last_message') or {}

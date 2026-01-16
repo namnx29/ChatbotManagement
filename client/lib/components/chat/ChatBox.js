@@ -11,6 +11,10 @@ import {
 	TagFilled
 } from '@ant-design/icons';
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
+import dayjs from 'dayjs';
+import 'dayjs/locale/vi';
+
+dayjs.locale('vi');
 
 const platformIcons = {
 	facebook: <FacebookFilled style={{ fontSize: '14px', color: '#1877f2' }} />,
@@ -23,6 +27,35 @@ const tagColors = {
 	'bot-failed': '#ff4d4f',
 	'no-response': '#8c8c8c',
 	interacting: '#fa8c16',
+};
+
+const getDateLabel = (date) => {
+	if (!date) return "";
+
+	let targetDate = dayjs(date);
+
+	if (!targetDate.isValid() && typeof date === 'string' && date.length === 24) {
+		const timestamp = parseInt(date.substring(0, 8), 16) * 1000;
+		targetDate = dayjs(timestamp);
+	}
+
+	if (!targetDate.isValid()) return "Ngày không xác định";
+
+	const now = dayjs();
+	if (targetDate.isSame(now, 'day')) return 'Hôm nay';
+	if (targetDate.isSame(now.subtract(1, 'day'), 'day')) return 'Hôm qua';
+	if (targetDate.isSame(now, 'year')) return targetDate.format('DD [tháng] MM');
+	return targetDate.format('DD/MM/YYYY');
+};
+
+const getRawDate = (msg) => {
+	if (!msg) return null;
+	const date = msg.created_at || msg.id || msg._id;
+
+	if (typeof date === 'string' && date.length === 24 && !dayjs(date).isValid()) {
+		return parseInt(date.substring(0, 8), 16) * 1000;
+	}
+	return date;
 };
 
 export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
@@ -75,6 +108,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 		if (message.trim()) {
 			const newMessage = {
 				id: Date.now(),
+				created_at: new Date().toISOString(),
 				text: message,
 				sender: 'user',
 				time: new Date().toLocaleTimeString('vi-VN', {
@@ -83,7 +117,6 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 				}),
 			};
 			setMessage('');
-			// inform parent so it can persist the message (parent will update conversation prop)
 			if (typeof onSendMessage === 'function') {
 				onSendMessage(newMessage);
 			}
@@ -200,94 +233,124 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					overflowAnchor: 'none',
 				}}
 			>
-				{/* Optionally show a small loader at top when loading more */}
 				{conversation.loadingMore && (
 					<div style={{ textAlign: 'center', marginBottom: '8px', color: '#666' }}>Đang tải...</div>
 				)}
 
-				{messages.map((msg) => (
-					<div
-						key={msg.id}
-						style={{
-							display: 'flex',
-							justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-							marginBottom: '16px',
-							alignItems: 'flex-end',
-							gap: '8px',
-						}}
-					>
-						{msg.sender === 'customer' && (
-							<Avatar size={32} src={msg.avatar || conversation.avatar}>
-								{(msg.name || conversation.name || 'U')[0]}
-							</Avatar>
-						)}
-						<div
-							style={{
-								maxWidth: '60%',
-								display: 'flex',
-								flexDirection: 'column',
-								alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-							}}
-						>
-							{msg.image ? (
+				{messages.map((msg, index) => {
+					const prevMsg = messages[index - 1];
+					const currentDate = getRawDate(msg);
+					const prevDate = getRawDate(prevMsg);
+					const isNewDay = !prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day');
+
+					return (
+						<div key={`container-${msg._id || msg.id || index}`}>
+							{isNewDay && (
 								<div style={{
-									maxWidth: '300px',
-									maxHeight: '300px',
-									overflow: 'hidden',
-									borderRadius: '12px',
-									marginBottom: '4px',
-									border: '1px solid #f0f0f0',
-									borderRadius: '12px',
+									textAlign: 'center',
+									margin: '24px 0 16px',
+									display: 'flex',
+									alignItems: 'center',
+									justifyContent: 'center',
+									gap: '10px'
 								}}>
-									<Image
-										src={msg.image}
-										alt="Sent"
-										style={{
-											width: '100%',
-											height: '100%',
-											objectFit: 'cover',
-											cursor: 'pointer',
-										}}
-										onLoad={() => {
-											setImageLoaded(prev => ({ ...prev, [msg.id]: true }));
-											if (messagesContainerRef.current) {
-												messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-											}
-										}}
-										preview={{
-											cover: <div style={{ fontSize: '12px' }}>Click to view</div>
-										}}
-									/>
-								</div>
-							) : (
-								<div
-									style={{
-										background: msg.sender === 'user' ? '#6c3fb5' : 'white',
-										color: msg.sender === 'user' ? 'white' : '#333',
-										padding: '10px 16px',
+									<span style={{
+										background: '#e1e4e8',
+										color: '#65676b',
+										padding: '2px 12px',
 										borderRadius: '12px',
-										fontSize: '14px',
-										boxShadow:
-											msg.sender === 'user'
-												? '0 2px 4px rgba(108, 63, 181, 0.2)'
-												: '0 1px 2px rgba(0,0,0,0.05)',
-									}}
-								>
-									{normalizeMessageText(msg)}
+										fontSize: '11px',
+										fontWeight: '500',
+									}}>
+										{getDateLabel(currentDate)}
+									</span>
 								</div>
 							)}
-							<span
+
+							<div
+								// key={msg.id}
 								style={{
-									fontSize: '11px',
-									color: '#999',
-									marginTop: '4px',
+									display: 'flex',
+									justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+									marginBottom: '16px',
+									alignItems: 'flex-end',
+									gap: '8px',
 								}}
 							>
-								{msg.time}
-							</span>
+								{msg.sender === 'customer' && (
+									<Avatar size={32} src={msg.avatar || conversation.avatar}>
+										{(msg.name || conversation.name || 'U')[0]}
+									</Avatar>
+								)}
+								<div
+									style={{
+										maxWidth: '60%',
+										display: 'flex',
+										flexDirection: 'column',
+										alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+									}}
+								>
+									{msg.image ? (
+										<div style={{
+											maxWidth: '300px',
+											maxHeight: '300px',
+											overflow: 'hidden',
+											borderRadius: '12px',
+											marginBottom: '4px',
+											border: '1px solid #f0f0f0',
+											borderRadius: '12px',
+										}}>
+											<Image
+												src={msg.image}
+												alt="Sent"
+												style={{
+													width: '100%',
+													height: '100%',
+													objectFit: 'cover',
+													cursor: 'pointer',
+												}}
+												onLoad={() => {
+													setImageLoaded(prev => ({ ...prev, [msg.id]: true }));
+													if (messagesContainerRef.current) {
+														messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+													}
+												}}
+												preview={{
+													cover: <div style={{ fontSize: '12px' }}>Click to view</div>
+												}}
+											/>
+										</div>
+									) : (
+										<div
+											style={{
+												background: msg.sender === 'user' ? '#6c3fb5' : 'white',
+												color: msg.sender === 'user' ? 'white' : '#333',
+												padding: '10px 16px',
+												borderRadius: '12px',
+												fontSize: '14px',
+												boxShadow:
+													msg.sender === 'user'
+														? '0 2px 4px rgba(108, 63, 181, 0.2)'
+														: '0 1px 2px rgba(0,0,0,0.05)',
+											}}
+										>
+											{normalizeMessageText(msg)}
+										</div>
+									)}
+									<span
+										style={{
+											fontSize: '11px',
+											color: '#999',
+											marginTop: '4px',
+										}}
+									>
+										{msg.time}
+									</span>
+								</div>
+							</div>
 						</div>
-					</div>
-				))}
+					);
+				})}
 				<div ref={messagesEndRef} />
 			</div>
 

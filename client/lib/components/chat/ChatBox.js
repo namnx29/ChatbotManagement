@@ -26,6 +26,7 @@ const tagColors = {
 };
 
 export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
+	const [imageLoaded, setImageLoaded] = useState({});
 	const [message, setMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
@@ -46,29 +47,29 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 	}, [conversation?.messages]);
 
 	useLayoutEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
+		const el = messagesContainerRef.current;
+		if (!el) return;
 
-    if (isPrependingRef.current) {
-      const delta = el.scrollHeight - prevScrollHeightRef.current;
-      el.scrollTop = delta;
-      isPrependingRef.current = false;
-    } else if (messages.length > 0 && !conversation.loadingMore) {
-        el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
+		if (isPrependingRef.current) {
+			const delta = el.scrollHeight - prevScrollHeightRef.current;
+			el.scrollTop = delta;
+			isPrependingRef.current = false;
+		} else if (messages.length > 0 && !conversation.loadingMore) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [messages]);
 
 	const handleScroll = async (e) => {
-    const el = e.currentTarget;
-    if (el.scrollTop <= 5 && !conversation.loadingMore && conversation.hasMore) {
-      isPrependingRef.current = true;
-      prevScrollHeightRef.current = el.scrollHeight;
-      
-      if (onLoadMore) {
-        await onLoadMore();
-      }
-    }
-  };
+		const el = e.currentTarget;
+		if (el.scrollTop <= 5 && !conversation.loadingMore && conversation.hasMore) {
+			isPrependingRef.current = true;
+			prevScrollHeightRef.current = el.scrollHeight;
+
+			if (onLoadMore) {
+				await onLoadMore();
+			}
+		}
+	};
 
 	const handleSend = () => {
 		if (message.trim()) {
@@ -196,6 +197,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					overflowY: 'auto',
 					padding: '20px',
 					background: '#f8f9fa',
+					overflowAnchor: 'none',
 				}}
 			>
 				{/* Optionally show a small loader at top when loading more */}
@@ -234,7 +236,8 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 									overflow: 'hidden',
 									borderRadius: '12px',
 									marginBottom: '4px',
-									border: '1px solid #f0f0f0'
+									border: '1px solid #f0f0f0',
+									borderRadius: '12px',
 								}}>
 									<Image
 										src={msg.image}
@@ -243,7 +246,13 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 											width: '100%',
 											height: '100%',
 											objectFit: 'cover',
-											cursor: 'pointer'
+											cursor: 'pointer',
+										}}
+										onLoad={() => {
+											setImageLoaded(prev => ({ ...prev, [msg.id]: true }));
+											if (messagesContainerRef.current) {
+												messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+											}
 										}}
 										preview={{
 											cover: <div style={{ fontSize: '12px' }}>Click to view</div>

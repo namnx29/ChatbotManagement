@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import { io } from 'socket.io-client';
 
 const NotificationContext = createContext();
@@ -17,6 +18,7 @@ export function NotificationProvider({ children }) {
   const socketRef = useRef(null);
   const conversationUnreadCountsRef = useRef({});
   const currentActiveConversationRef = useRef(null);
+  const pathname = usePathname();
 
   const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
 
@@ -54,11 +56,35 @@ export function NotificationProvider({ children }) {
     setHasUnread(count > 0);
     
     if (count > 0) {
-      document.title = `(${count}) Tin nhắn mới - Quản lý Chat`;
+      document.title = `(${count}) Tin nhắn mới`;
     } else {
-      document.title = `Quản lý Chat`;
+      document.title = `Test App`;
     }
   }, []);
+
+  // Force update title whenever pathname changes or unreadCount changes
+  useEffect(() => {
+    if (unreadCount > 0) {
+      document.title = `(${unreadCount}) Tin nhắn mới`;
+    } else {
+      document.title = `Test App`;
+    }
+  }, [pathname, unreadCount]);
+
+  // Continuously enforce the correct title (aggressive approach)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const expectedTitle = unreadCount > 0 
+        ? `(${unreadCount}) Tin nhắn mới`
+        : `Test App`;
+      
+      if (document.title !== expectedTitle) {
+        document.title = expectedTitle;
+      }
+    }, 100); // Check every 100ms
+
+    return () => clearInterval(interval);
+  }, [unreadCount]);
 
   // Set active conversation (called when user opens a conversation)
   const setActiveConversation = useCallback((conversationId) => {
@@ -84,8 +110,8 @@ export function NotificationProvider({ children }) {
         const isCurrentActiveConversation = currentActiveConversationRef.current === convId;
 
         // Only show notification if message is not from the active conversation
+        playNotificationSound();
         if (!isCurrentActiveConversation) {
-          playNotificationSound();
           showPushNotification(payload);
           
           // Update conversation-level unread count

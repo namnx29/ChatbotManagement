@@ -1,8 +1,9 @@
 "use client";
 
-import { Button, Typography, message, Spin } from "antd";
+import { Button, Typography, App } from "antd";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { usePublicPageGuard } from "@/lib/auth";
 
 import { ArrowLeftOutlined, MailOutlined } from "@ant-design/icons"; 
 import { useState, useEffect } from "react";
@@ -12,11 +13,17 @@ const { Title, Text } = Typography;
 const RESEND_DELAY_SECONDS = 60;
 
 export default function SendEmailPage() {
+  const { message } = App.useApp();
   const [countdown, setCountdown] = useState(RESEND_DELAY_SECONDS);
   const [isResendDisabled, setIsResendDisabled] = useState(true);
   const [email, setEmail] = useState("");
   const [checking, setChecking] = useState(false);
   const router = useRouter();
+
+  // Redirect to dashboard if already authenticated
+  const { isChecking } = usePublicPageGuard();
+
+  if (isChecking) return null;
 
   useEffect(() => {
     // Get email from localStorage or URL

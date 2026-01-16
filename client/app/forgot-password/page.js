@@ -4,6 +4,7 @@ import { Form, Input, Button, Typography, message } from "antd";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { usePublicPageGuard } from "@/lib/auth";
 
 const { Title, Text } = Typography;
 
@@ -12,6 +13,10 @@ export default function ForgotPasswordPage() {
   const [submittable, setSubmittable] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  const { isChecking } = usePublicPageGuard();
+
+  if (isChecking) return null;
 
   const shouldDisableButton = () => {
     const errors = form.getFieldsError();
@@ -32,7 +37,7 @@ export default function ForgotPasswordPage() {
   const onFinish = async (values) => {
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:5000/api/forgot-password', {
+      const response = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/forgot-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

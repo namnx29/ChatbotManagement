@@ -72,7 +72,7 @@ def get_auth_url():
     return jsonify({'success': True, 'auth_url': auth_url, 'state': state}), 200
 
 
-@facebook_bp.route('/api/facebook/callback', methods=['GET', 'POST'])
+@facebook_bp.route('/facebook-callback', methods=['GET', 'POST'])
 def facebook_callback():
     code = request.args.get('code') or (request.get_json(silent=True) or {}).get('code')
     state = request.args.get('state') or (request.get_json(silent=True) or {}).get('state')
@@ -430,9 +430,6 @@ def webhook_event():
                 avatar=sender_profile.get('avatar') if sender_profile else None,
             )
 
-            # Determine a friendly preview for the conversation's last message.
-            # - If there is text (or sticker_id) use it
-            # - If no text but the message contains attachments/images, show an attachment label
             msg_obj = messaging.get('message') or {}
             preview_text = message_text
             try:
@@ -443,11 +440,14 @@ def webhook_event():
             except Exception:
                 preview_text = preview_text
 
+            # Upsert conversation and get conversation_id
+            # Only update last_message_text if we have actual text
+            # For attachment-only messages, we still want to update the conversation timestamp
             conversation_doc = conversation_model.upsert_conversation(
                 oa_id=integration.get('oa_id'),
                 customer_id=customer_id,
-                last_message_text=preview_text,  # Will be None if no text/attachments
-                last_message_created_at=datetime.utcnow() if preview_text else None,
+                last_message_text=preview_text,  # Can be None for attachment-only messages
+                last_message_created_at=datetime.utcnow() if message_text else None,
                 direction=direction,
                 customer_info={
                     'name': sender_profile.get('name') if sender_profile else None,
@@ -583,7 +583,7 @@ def list_conversations():
             for c in convs_legacy:
                 sender_id = c.get('sender_id')
                 sp = c.get('sender_profile') or {}
-                name = sp.get('name') or f'User {sender_id}'
+                name = sp.get('name') or None
                 avatar = sp.get('avatar') or None
                 convs.append({
                     'id': f"facebook:{oa_id}:{sender_id}",
@@ -609,7 +609,7 @@ def list_conversations():
             for c in convs_legacy:
                 sender_id = c.get('sender_id')
                 sp = c.get('sender_profile') or {}
-                name = sp.get('name') or f'User {sender_id}'
+                name = sp.get('name') or None
                 avatar = sp.get('avatar') or None
                 convs.append({
                     'id': f"facebook:{oa_id}:{sender_id}",
@@ -647,7 +647,7 @@ def list_conversations():
             
             # Get customer info from denormalized data or fetch from customer collection
             customer_info = c.get('customer_info') or {}
-            name = customer_info.get('name') or f'User {sender_id}'
+            name = customer_info.get('name') or None
             avatar = customer_info.get('avatar')
             
             # Build legacy conversation ID
@@ -703,7 +703,6 @@ def get_conversation_messages(conv_id):
     if platform != 'facebook':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    # Pagination parameters: default to 20 messages per page for chat UI
     try:
         limit = int(request.args.get('limit', 20))
     except Exception:
@@ -877,7 +876,7 @@ def send_conversation_message(conv_id):
         conversation_model.upsert_conversation(
             oa_id=oa_id,
             customer_id=customer_id,
-            last_message_text=text if text else ("Image" if image else None),
+            last_message_text=text if text else ("Tệp đính kèm" if image else None),
             last_message_created_at=datetime.utcnow(),
             direction='out',
         )
@@ -907,7 +906,7 @@ def send_conversation_message(conv_id):
                 'platform': platform,
                 'oa_id': oa_id,
                 'sender_id': sender_id,
-                'message': text if text else ("Image" if image else None),
+                'message': text if text else ("Tệp đính kèm" if image else None),
                 'message_doc': sent_doc,
                 'conv_id': f"{platform}:{oa_id}:{sender_id}",
                 'conversation_id': conversation_id,  # Already string

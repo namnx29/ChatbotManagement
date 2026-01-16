@@ -312,10 +312,11 @@ export default function ChatManagementPage() {
           try {
             if (integration.platform === 'facebook') {
               const res = await listFacebookConversations(accountId, integration.oa_id);
+              console.log(res.data);
               return (res?.data || []).map(c => ({
                 id: c.id,
-                name: c.name,
-                avatar: c.avatar || integration.avatar_url,
+                name: c?.name || 'Khách hàng',
+                avatar: c.avatar,
                 platform: 'facebook',
                 lastMessage: c.lastMessage,
                 time: c.time,
@@ -329,8 +330,8 @@ export default function ChatManagementPage() {
               const res = await listZaloConversations(accountId, integration.oa_id);
               return (res?.data || []).map(c => ({
                 id: c.id,
-                name: c.name,
-                avatar: c.avatar || integration.avatar_url,
+                name: c?.name || 'Khách hàng',
+                avatar: c.avatar,
                 platform: 'zalo',
                 lastMessage: c.lastMessage,
                 time: c.time,

@@ -3,6 +3,7 @@
 import { Typography, Button, Spin, Result } from "antd";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { usePublicPageGuard } from "@/lib/auth";
 import { verifyEmail } from "@/lib/api";
 import { message } from "antd";
 
@@ -11,6 +12,11 @@ const { Title, Text } = Typography;
 export default function VerifyEmailPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
+
+  // Redirect to dashboard if already authenticated
+  const { isChecking } = usePublicPageGuard();
+
+  if (isChecking) return null;
   const [verifying, setVerifying] = useState(true);
   const [verificationStatus, setVerificationStatus] = useState(null); // 'success' or 'error'
   const [verificationMessage, setVerificationMessage] = useState("");

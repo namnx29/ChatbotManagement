@@ -1,36 +1,49 @@
 "use client";
 
-import { Form, Input, Button, Typography, message } from "antd";
+import { Form, Input, Button, Typography, App } from "antd";
 import { EyeInvisibleOutlined, EyeOutlined } from "@ant-design/icons";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { loginUser } from "@/lib/api";
+import { usePublicPageGuard } from "@/lib/auth";
+import { loginUser, resendVerificationEmail } from "@/lib/api";
 
 const { Title, Text } = Typography;
 
 export default function LoginPage() {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const { message } = App.useApp();
   const router = useRouter();
+
+  const { isChecking } = usePublicPageGuard();
+
+  if (isChecking) return null;
 
   const onFinish = async (values) => {
     setLoading(true);
     try {
       const result = await loginUser(values.email, values.password);
-      
+
       if (result.success) {
         message.success("Đăng nhập thành công");
-        // Store user info if needed
         localStorage.setItem('userEmail', result.user.email);
         localStorage.setItem('accountId', result.user.accountId);
         localStorage.setItem('userName', result.user.name || result.user.email.split('@')[0]);
-        
-        // Redirect to dashboard
+
         router.push('/dashboard');
       }
     } catch (error) {
-      message.error(error.message || "Đăng nhập thất bại");
+      if (error.info?.code === 'UNVERIFIED') {
+        const unverifiedEmail = error.info.email;
+
+        message.info("Tài khoản chưa được xác thực, kiểm tra lại email để xác thực.");
+        await resendVerificationEmail(unverifiedEmail);
+        router.push(`/send-email?email=${encodeURIComponent(unverifiedEmail)}`);
+        return;
+      }
+
+      message.error(error.message || 'Đăng nhập không thành công');
     } finally {
       setLoading(false);
     }

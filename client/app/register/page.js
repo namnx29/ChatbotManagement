@@ -1,24 +1,31 @@
 "use client";
 
-import { Form, Input, Button, Typography, Checkbox, message } from "antd";
+import { Form, Input, Button, Typography, App } from "antd";
 import {
-  CloseCircleFilled,
   DownOutlined,
   UpOutlined,
 } from "@ant-design/icons";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { usePublicPageGuard } from "@/lib/auth";
 import { registerUser } from "@/lib/api";
 import PasswordInputWithStrength from "@/lib/components/PasswordInputWithStrength";
 
 const { Title, Text } = Typography;
 
 export default function RegisterPage() {
+  const { message } = App.useApp();
   const [form] = Form.useForm();
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  // Redirect to dashboard if already authenticated
+  const { isChecking } = usePublicPageGuard();
+
+  if (isChecking) return null;
+
   const [isInputVisible, setIsInputVisible] = useState(false);
 
   const onFinish = async (values) => {
@@ -59,10 +66,9 @@ export default function RegisterPage() {
   return (
     <div
       style={{
-        minHeight: "100vh",
+        height: "100vh", 
+        overflowY: "auto", 
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
         backgroundColor: "#f5f5f5",
         padding: "20px",
       }}
@@ -75,6 +81,7 @@ export default function RegisterPage() {
           padding: "48px 40px",
           borderRadius: "8px",
           boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+          margin: "auto",
         }}
       >
         <Title

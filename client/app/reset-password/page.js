@@ -5,6 +5,7 @@ import { EyeInvisibleOutlined, EyeOutlined } from "@ant-design/icons";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
+import { usePublicPageGuard } from "@/lib/auth";
 
 const { Title, Text } = Typography;
 
@@ -14,6 +15,12 @@ export default function ResetPasswordPage() {
   const [tokenValid, setTokenValid] = useState(false);
   const [verifying, setVerifying] = useState(true);
   const router = useRouter();
+
+  // Redirect to dashboard if already authenticated
+  const { isChecking } = usePublicPageGuard();
+
+  if (isChecking) return null;
+
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
   const email = searchParams.get('email');
@@ -48,7 +55,7 @@ export default function ResetPasswordPage() {
 
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:5000/api/reset-password', {
+      const response = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/reset-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

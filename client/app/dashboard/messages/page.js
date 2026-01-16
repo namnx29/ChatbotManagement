@@ -312,7 +312,6 @@ export default function ChatManagementPage() {
           try {
             if (integration.platform === 'facebook') {
               const res = await listFacebookConversations(accountId, integration.oa_id);
-              console.log(res.data);
               return (res?.data || []).map(c => ({
                 id: c.id,
                 name: c?.name || 'Khách hàng',

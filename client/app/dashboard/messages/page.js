@@ -49,7 +49,7 @@ const FILTER_OPTIONS = [
 
 export default function ChatManagementPage() {
   const { message } = App.useApp();
-  const { updateUnreadCount, setActiveConversation, clearActiveConversation } = useNotification();
+  const { setActiveConversation, clearActiveConversation } = useNotification();
   // State
   const [selectedChat, setSelectedChat] = useState(null);
   const [filterChannel, setFilterChannel] = useState('all');

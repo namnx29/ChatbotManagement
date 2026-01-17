@@ -39,7 +39,7 @@ const getDateLabel = (date) => {
 		targetDate = dayjs(timestamp);
 	}
 
-	if (!targetDate.isValid()) return "Ngày không xác định";
+	if (!targetDate.isValid()) return "";
 
 	const now = dayjs();
 	if (targetDate.isSame(now, 'day')) return 'Hôm nay';
@@ -115,6 +115,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					hour: '2-digit',
 					minute: '2-digit',
 				}),
+				pending: true,
 			};
 			setMessage('');
 			if (typeof onSendMessage === 'function') {
@@ -130,12 +131,14 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 			reader.onloadend = () => {
 				const newMessage = {
 					id: Date.now(),
+					created_at: new Date().toISOString(),
 					image: reader.result,
 					sender: 'user',
 					time: new Date().toLocaleTimeString('vi-VN', {
 						hour: '2-digit',
 						minute: '2-digit',
 					}),
+					pending: true,
 				};
 				if (typeof onSendMessage === 'function') {
 					onSendMessage(newMessage);
@@ -241,7 +244,9 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					const prevMsg = messages[index - 1];
 					const currentDate = getRawDate(msg);
 					const prevDate = getRawDate(prevMsg);
-					const isNewDay = !prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day');
+					
+					const isNewDay = !msg.pending && !prevMsg?.pending && 
+						(!prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day'));
 
 					return (
 						<div key={`container-${msg._id || msg.id || index}`}>
@@ -259,7 +264,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 										color: '#65676b',
 										padding: '2px 12px',
 										borderRadius: '12px',
-										fontSize: '11px',
+										fontSize: '12px',
 										fontWeight: '500',
 									}}>
 										{getDateLabel(currentDate)}
@@ -268,13 +273,13 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 							)}
 
 							<div
-								// key={msg.id}
 								style={{
 									display: 'flex',
 									justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
 									marginBottom: '16px',
 									alignItems: 'flex-end',
 									gap: '8px',
+									opacity: msg.pending ? 0.6 : 1,
 								}}
 							>
 								{msg.sender === 'customer' && (

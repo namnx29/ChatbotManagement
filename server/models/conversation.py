@@ -135,3 +135,15 @@ class ConversationModel:
             return str(doc['_id'])
         return None
 
+    def get_all_oa_ids(self):
+        """Get all distinct oa_ids in the conversations collection"""
+        oa_ids = self.collection.distinct('oa_id')
+        return oa_ids or []
+
+    def find_all_by_oa_ids(self, oa_ids, limit=500, skip=0):
+        """Find all conversations for a list of oa_ids, sorted by updated_at descending"""
+        if not oa_ids:
+            return []
+        cursor = self.collection.find({'oa_id': {'$in': oa_ids}}).sort('updated_at', -1).skip(skip).limit(limit)
+        docs = [self._serialize(d) for d in list(cursor)]
+        return docs

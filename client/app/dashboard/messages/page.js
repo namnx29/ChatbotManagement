@@ -10,6 +10,7 @@ import {
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import {
+  listAllConversations,
   listIntegrations,
   listFacebookConversations,
   listZaloConversations,
@@ -49,7 +50,7 @@ const FILTER_OPTIONS = [
 
 export default function ChatManagementPage() {
   const { message } = App.useApp();
-  const { setActiveConversation, clearActiveConversation } = useNotification();
+  const { updateUnreadCount, setActiveConversation, clearActiveConversation } = useNotification();
   // State
   const [selectedChat, setSelectedChat] = useState(null);
   const [filterChannel, setFilterChannel] = useState('all');
@@ -194,6 +195,7 @@ export default function ChatManagementPage() {
             isUnread: payload.direction !== 'out',
             messages: [],
             oa_id: payload.oa_id,
+            platform_status: { is_connected: true, disconnected_at: null }
           }, ...prev];
         }
 
@@ -305,51 +307,20 @@ export default function ChatManagementPage() {
 
       try {
         setLoading(true);
-        const result = await listIntegrations(accountId);
-        const integrations = result?.data || [];
-
-        const conversationPromises = integrations.map(async (integration) => {
-          try {
-            if (integration.platform === 'facebook') {
-              const res = await listFacebookConversations(accountId, integration.oa_id);
-              return (res?.data || []).map(c => ({
-                id: c.id,
-                name: c?.name || 'Khách hàng',
-                avatar: c.avatar,
-                platform: 'facebook',
-                lastMessage: c.lastMessage,
-                time: c.time,
-                isUnread: (c.unreadCount || 0) > 0,
-                messages: [],
-                oa_id: integration.oa_id,
-              }));
-            }
-
-            if (integration.platform === 'zalo') {
-              const res = await listZaloConversations(accountId, integration.oa_id);
-              return (res?.data || []).map(c => ({
-                id: c.id,
-                name: c?.name || 'Khách hàng',
-                avatar: c.avatar,
-                platform: 'zalo',
-                lastMessage: c.lastMessage,
-                time: c.time,
-                isUnread: (c.unreadCount || 0) > 0,
-                messages: [],
-                oa_id: integration.oa_id,
-              }));
-            }
-
-            // Unsupported platform or no conversation loader defined
-            return [];
-          } catch (error) {
-            console.error(`Failed to load conversations for ${integration.oa_id}:`, error);
-            return [];
-          }
-        });
-
-        const conversationArrays = await Promise.all(conversationPromises);
-        const allConversations = conversationArrays.flat();
+        const res = await listAllConversations(accountId);
+        const allConversations = (res?.data || []).map(c => ({
+          id: c.id,
+          name: c?.name || 'Khách hàng',
+          avatar: c.avatar,
+          platform: c.platform,
+          lastMessage: c.lastMessage,
+          time: c.time,
+          isUnread: (c.unreadCount || 0) > 0,
+          messages: [],
+          oa_id: c.oa_id,
+          customer_id: c.customer_id,
+          platform_status: c.platform_status || { is_connected: true, disconnected_at: null }
+        }));
 
         const sortedConversations = allConversations.sort((a, b) => {
           const timeA = a.time ? new Date(a.time).getTime() : 0;

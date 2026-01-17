@@ -75,7 +75,25 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 	// Keep local messages in sync when conversation changes or when messages array updates
 	useEffect(() => {
 		// Conversation changed -> reset state
-		setMessages(conversation?.messages || []);
+		const newMessages = conversation?.messages || [];
+		
+		// Remove duplicates based on _id or id, keeping the most recent version (non-pending preferred)
+		const uniqueMessages = newMessages.reduce((acc, msg) => {
+			const key = msg._id || msg.id;
+			const existing = acc.find(m => (m._id || m.id) === key);
+			
+			if (!existing) {
+				acc.push(msg);
+			} else if (existing.pending && !msg.pending) {
+				// Replace pending message with confirmed one
+				const index = acc.indexOf(existing);
+				acc[index] = msg;
+			}
+			
+			return acc;
+		}, []);
+		
+		setMessages(uniqueMessages);
 		initialLoadRef.current = true;
 	}, [conversation?.messages]);
 
@@ -248,8 +266,10 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					const isNewDay = !msg.pending && !prevMsg?.pending && 
 						(!prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day'));
 
+					const messageKey = msg._id || msg.id || `temp-${index}`;
+
 					return (
-						<div key={`container-${msg._id || msg.id || index}`}>
+						<div key={`container-${messageKey}`}>
 							{isNewDay && (
 								<div style={{
 									textAlign: 'center',

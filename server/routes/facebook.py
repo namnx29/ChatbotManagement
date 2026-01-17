@@ -686,6 +686,25 @@ def list_conversations():
         else:
             # Legacy format (already converted above)
             out.append(c)
+
+            # Check integration status
+    try:
+        integration = model.find_by_platform_and_oa('facebook', oa_id)
+        is_connected = bool(integration and integration.get('is_active', True))
+        disconnected_at = None
+        if not is_connected and integration:
+            disconnected_at = integration.get('updated_at')
+    except Exception as e:
+        logger.error(f"Error checking integration status: {e}")
+        is_connected = False
+        disconnected_at = None
+
+    # Add platform_status to each conversation
+    for conv in out:
+        conv['platform_status'] = {
+            'is_connected': is_connected,
+            'disconnected_at': disconnected_at.isoformat() + 'Z' if disconnected_at else None
+        }
     
     logger.info(f"Returning {len(out)} conversations for oa_id {oa_id}")
     if len(out) == 0:
@@ -779,8 +798,8 @@ def mark_conversation_read(conv_id):
     # Verify integration ownership
     model = IntegrationModel(current_app.mongo_client)
     integration = model.find_by_platform_and_oa(platform, oa_id)
-    if not integration or integration.get('accountId') != account_id:
-        return jsonify({'success': False, 'message': 'Not authorized or integration not found'}), 403
+    if integration and integration.get('accountId') != account_id:
+        return jsonify({'success': False, 'message': 'Not authorized'}), 403
 
     try:
         from models.conversation import ConversationModel

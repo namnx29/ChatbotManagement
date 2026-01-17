@@ -383,18 +383,12 @@ export async function listIntegrations(accountId, platform = null) {
   }
 }
 
-/**
- * List conversations for a Facebook Page (oa_id)
- * @param {string} accountId
- * @param {string} oa_id
- */
-export async function listFacebookConversations(accountId, oa_id) {
+export async function listAllConversations(accountId) {
   try {
     if (!accountId) throw new Error('No accountId available');
-    const url = new URL(`${API_BASE_URL}/api/facebook/conversations`);
-    url.searchParams.append('oa_id', oa_id);
+    const url = `${API_BASE_URL}/api/integrations/conversations/all`;
 
-    const response = await fetch(url.toString(), {
+    const response = await fetch(url, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -404,14 +398,14 @@ export async function listFacebookConversations(accountId, oa_id) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('listFacebookConversations error response:', errorText);
+      console.error('listAllConversations error response:', errorText);
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
     const result = await parseResponse(response);
     return result;
   } catch (error) {
-    console.error('API Error [GET /facebook/conversations]:', error);
+    console.error('API Error [GET /integrations/conversations/all]:', error);
     throw error;
   }
 }
@@ -525,37 +519,6 @@ export async function sendConversationAttachment(accountId, convId, imageData, t
   }
 }
 
-/**
- * Zalo equivalents
- */
-export async function listZaloConversations(accountId, oa_id) {
-  try {
-    if (!accountId) throw new Error('No accountId available');
-    const url = new URL(`${API_BASE_URL}/api/zalo/conversations`);
-    url.searchParams.append('oa_id', oa_id);
-
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Account-Id': accountId,
-        'ngrok-skip-browser-warning': 'true',
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('listZaloConversations error response:', errorText);
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const result = await parseResponse(response);
-    return result;
-  } catch (error) {
-    console.error('API Error [GET /zalo/conversations]:', error);
-    throw error;
-  }
-}
 
 export async function getZaloConversationMessages(accountId, convId, opts = {}) {
   try {

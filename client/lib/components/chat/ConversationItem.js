@@ -1,7 +1,7 @@
 'use client';
 
-import { Avatar, Dropdown } from 'antd';
-import { MoreOutlined, TagFilled } from '@ant-design/icons';
+import { Avatar, Dropdown, Tooltip } from 'antd';
+import { MoreOutlined, TagFilled, DisconnectOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 
 const platformIcons = {
@@ -76,6 +76,10 @@ function formatRelativeTime(time) {
 export default function ConversationItem({ conversation, isSelected, onClick, isUnread }) {
 	const [relativeTime, setRelativeTime] = useState(formatRelativeTime(conversation.time));
 
+	// Safely determine if platform is disconnected
+	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
+	const isDisconnected = platformStatus.is_connected === false;
+
 	useEffect(() => {
 		setRelativeTime(formatRelativeTime(conversation.time));
 
@@ -109,21 +113,42 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 					<Avatar size={48} src={conversation.avatar}>
 						{conversation.name[0]}
 					</Avatar>
-					<div
-						style={{
-							position: 'absolute',
-							bottom: '0',
-							left: '0',
-							width: '18px',
-							height: '18px',
-							borderRadius: '50%',
-							display: 'flex',
-							alignItems: 'center',
-							justifyContent: 'center',
-						}}
+					<Tooltip
+						title={isDisconnected ? "Nền tảng không được kết nối" : ""}
+						trigger={isDisconnected ? "hover" : ""}
 					>
-						{platformIcons[conversation.platform]}
-					</div>
+						<div
+							style={{
+								position: 'absolute',
+								bottom: '0',
+								left: '0',
+								width: '18px',
+								height: '18px',
+								borderRadius: '50%',
+								display: 'flex',
+								alignItems: 'center',
+								justifyContent: 'center',
+								opacity: isDisconnected ? 0.5 : 1,
+							}}
+						>
+							{platformIcons[conversation.platform]}
+							{isDisconnected && (
+								<DisconnectOutlined
+									style={{
+										position: 'absolute',
+										right: '-6px',
+										top: '-6px',
+										fontSize: '12px',
+										color: '#ff4d4f',
+										backgroundColor: 'white',
+										borderRadius: '50%',
+										padding: '2px',
+										border: '1px solid #ff4d4f'
+									}}
+								/>
+							)}
+						</div>
+					</Tooltip>
 				</div>
 
 				{/* Content */}

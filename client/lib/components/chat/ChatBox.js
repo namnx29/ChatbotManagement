@@ -1,6 +1,6 @@
 'use client';
 
-import { Avatar, Input, Button, Switch, Image } from 'antd';
+import { Avatar, Input, Button, Switch, Image, Alert } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
@@ -63,6 +63,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 	const [message, setMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
+	
+	// Safely determine if platform is disconnected
+	// Default to connected (true) if platform_status is not set or is_connected is not explicitly false
+	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
+	const isDisconnected = platformStatus.is_connected === false; // Only true if EXPLICITLY false
+	
 	const messagesEndRef = useRef(null);
 	const fileInputRef = useRef(null);
 	const messagesContainerRef = useRef(null);
@@ -386,42 +392,60 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					borderTop: '1px solid #f0f0f0',
 					background: 'white',
 					display: 'flex',
+					flexDirection: 'column',
 					gap: '12px',
-					alignItems: 'center',
 				}}
 			>
-				<input
-					type="file"
-					ref={fileInputRef}
-					style={{ display: 'none' }}
-					accept="image/*"
-					onChange={handleImageUpload}
-				/>
-				<Button
-					icon={<PictureOutlined />}
-					size="large"
-					onClick={() => fileInputRef.current?.click()}
-					style={{ flexShrink: 0 }}
-				/>
-				<Input
-					placeholder="Nhập tin nhắn..."
-					value={message}
-					onChange={(e) => setMessage(e.target.value)}
-					onPressEnter={handleSend}
-					size="large"
-					style={{ flex: 1 }}
-				/>
-				<Button
-					type="primary"
-					icon={<SendOutlined />}
-					size="large"
-					onClick={handleSend}
-					style={{
-						background: '#6c3fb5',
-						borderColor: '#6c3fb5',
-						flexShrink: 0,
-					}}
-				/>
+				{isDisconnected && (
+					<Alert
+						type="warning"
+						showIcon
+						title="Nền tảng không được kết nối"
+						description="Bạn không thể gửi tin nhắn vì nền tảng này đã bị ngắt kết nối. Hãy kết nối lại nền tảng này trong phần tích hợp để tiếp tục nhắn tin."
+						style={{ marginBottom: '4px' }}
+					/>
+				)}
+				<div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+					<input
+						type="file"
+						ref={fileInputRef}
+						style={{ display: 'none' }}
+						accept="image/*"
+						onChange={handleImageUpload}
+					/>
+					<Button
+						icon={<PictureOutlined />}
+						size="large"
+						onClick={() => fileInputRef.current?.click()}
+						style={{ flexShrink: 0 }}
+						disabled={isDisconnected}
+					/>
+					<Input
+						placeholder={isDisconnected ? "Nền tảng không được kết nối" : "Nhập tin nhắn..."}
+						value={message}
+						onChange={(e) => setMessage(e.target.value)}
+						onPressEnter={!isDisconnected ? handleSend : null}
+						disabled={isDisconnected}
+						size="large"
+						style={{ 
+							flex: 1,
+							opacity: isDisconnected ? 0.6 : 1,
+							cursor: isDisconnected ? 'not-allowed' : 'text'
+						}}
+					/>
+					<Button
+						type="primary"
+						icon={<SendOutlined />}
+						size="large"
+						onClick={handleSend}
+						disabled={isDisconnected}
+						style={{
+							background: '#6c3fb5',
+							borderColor: '#6c3fb5',
+							flexShrink: 0,
+						}}
+					/>
+				</div>
 			</div>
 		</div>
 	);

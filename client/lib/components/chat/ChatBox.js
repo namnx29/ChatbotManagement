@@ -63,42 +63,35 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 	const [message, setMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
-	
-	// Safely determine if platform is disconnected
-	// Default to connected (true) if platform_status is not set or is_connected is not explicitly false
+
 	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
-	const isDisconnected = platformStatus.is_connected === false; // Only true if EXPLICITLY false
-	
+	const isDisconnected = platformStatus.is_connected === false;
+
 	const messagesEndRef = useRef(null);
 	const fileInputRef = useRef(null);
 	const messagesContainerRef = useRef(null);
 
-	// Refs for preserving scroll position when prepending older messages
 	const isPrependingRef = useRef(false);
 	const prevScrollHeightRef = useRef(0);
 	const initialLoadRef = useRef(true);
 
-	// Keep local messages in sync when conversation changes or when messages array updates
 	useEffect(() => {
-		// Conversation changed -> reset state
 		const newMessages = conversation?.messages || [];
-		
-		// Remove duplicates based on _id or id, keeping the most recent version (non-pending preferred)
+
 		const uniqueMessages = newMessages.reduce((acc, msg) => {
 			const key = msg._id || msg.id;
 			const existing = acc.find(m => (m._id || m.id) === key);
-			
+
 			if (!existing) {
 				acc.push(msg);
 			} else if (existing.pending && !msg.pending) {
-				// Replace pending message with confirmed one
 				const index = acc.indexOf(existing);
 				acc[index] = msg;
 			}
-			
+
 			return acc;
 		}, []);
-		
+
 		setMessages(uniqueMessages);
 		initialLoadRef.current = true;
 	}, [conversation?.messages]);
@@ -268,8 +261,8 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					const prevMsg = messages[index - 1];
 					const currentDate = getRawDate(msg);
 					const prevDate = getRawDate(prevMsg);
-					
-					const isNewDay = !msg.pending && !prevMsg?.pending && 
+
+					const isNewDay = !msg.pending && !prevMsg?.pending &&
 						(!prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day'));
 
 					const messageKey = msg._id || msg.id || `temp-${index}`;
@@ -324,12 +317,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 									{msg.image ? (
 										<div style={{
 											maxWidth: '300px',
-											maxHeight: '300px',
+											height: '200px',
 											overflow: 'hidden',
 											borderRadius: '12px',
 											marginBottom: '4px',
 											border: '1px solid #f0f0f0',
-											borderRadius: '12px',
+											position: 'relative',
 										}}>
 											<Image
 												src={msg.image}
@@ -339,11 +332,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 													height: '100%',
 													objectFit: 'cover',
 													cursor: 'pointer',
+													display: 'block'
 												}}
-												onLoad={() => {
-													setImageLoaded(prev => ({ ...prev, [msg.id]: true }));
-													if (messagesContainerRef.current) {
-														messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+												styles={{
+													root: {
+														width: '100%',
+														height: '100%'
 													}
 												}}
 												preview={{
@@ -427,7 +421,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 						onPressEnter={!isDisconnected ? handleSend : null}
 						disabled={isDisconnected}
 						size="large"
-						style={{ 
+						style={{
 							flex: 1,
 							opacity: isDisconnected ? 0.6 : 1,
 							cursor: isDisconnected ? 'not-allowed' : 'text'

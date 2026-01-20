@@ -92,7 +92,6 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 
 	const menuItems = [
 		{ key: 'mark-read', label: 'Đánh dấu đã đọc' },
-		{ key: 'archive', label: 'Lưu trữ' },
 		{ key: 'delete', label: 'Xóa', danger: true },
 	];
 
@@ -136,14 +135,10 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 								<DisconnectOutlined
 									style={{
 										position: 'absolute',
-										right: '-6px',
-										top: '-6px',
-										fontSize: '12px',
+										fontSize: '10px',
 										color: '#ff4d4f',
-										backgroundColor: 'white',
 										borderRadius: '50%',
 										padding: '2px',
-										border: '1px solid #ff4d4f'
 									}}
 								/>
 							)}

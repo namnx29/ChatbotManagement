@@ -6,21 +6,39 @@ import {
 	PictureOutlined,
 	SettingOutlined,
 	RobotOutlined,
-	FacebookFilled,
-	InstagramFilled,
+	EditOutlined,
 	TagFilled,
 	ArrowDownOutlined
 } from '@ant-design/icons';
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
+import CustomerNameChangeModal from '@/lib/components/popup/CustomerNameChangeModal';
 
 dayjs.locale('vi');
 
 const platformIcons = {
-	facebook: <FacebookFilled style={{ fontSize: '14px', color: '#1877f2' }} />,
-	instagram: <InstagramFilled style={{ fontSize: '14px', color: '#e4405f' }} />,
-	zalo: <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#0068ff' }}>Z</span>,
+	facebook: (
+		<img
+			src="/Messenger.png"
+			alt="Facebook"
+			style={{ width: '16px', height: '16px', objectFit: 'contain' }}
+		/>
+	),
+	instagram: (
+		<img
+			src="/Instagram.png"
+			alt="Instagram"
+			style={{ width: '16px', height: '16px', objectFit: 'contain' }}
+		/>
+	),
+	zalo: (
+		<img
+			src="/Zalo.png"
+			alt="Zalo"
+			style={{ width: '16px', height: '16px', objectFit: 'contain' }}
+		/>
+	),
 };
 
 const tagColors = {
@@ -66,6 +84,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const [hasNewMessages, setHasNewMessages] = useState(false);
 	const [isAtBottom, setIsAtBottom] = useState(true);
+	const [nameModalVisible, setNameModalVisible] = useState(false);
 
 	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
 	const isDisconnected = platformStatus.is_connected === false;
@@ -197,6 +216,13 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 		return '📎 Tệp này không được hỗ trợ';
 	};
 
+	const handleNameModalOpen = () => {
+		setNameModalVisible(true);
+	};
+
+	const handleNameModalClose = () => {
+		setNameModalVisible(false);
+	};
 
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
@@ -220,9 +246,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							<span style={{ fontWeight: '600', fontSize: '16px' }}>
 								{conversation.name}
 							</span>
-							{conversation.tag && (
-								<TagFilled style={{ color: tagColors[conversation.tag] }} />
-							)}
+							<Button type="text" size="small" onClick={handleNameModalOpen} icon={<EditOutlined />} />
 						</div>
 						<div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
 							{platformIcons[conversation.platform]}
@@ -230,6 +254,9 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 								{conversation.platform === 'facebook' ? 'Facebook' :
 									conversation.platform === 'instagram' ? 'Instagram' : 'Zalo'}
 							</span>
+							{conversation.tag && (
+								<TagFilled style={{ color: tagColors['completed'] }} />
+							)}
 							{conversation.secondaryTag && (
 								<div
 									style={{
@@ -488,6 +515,11 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 					/>
 				</div>
 			</div>
+			<CustomerNameChangeModal
+				visible={nameModalVisible}
+				onClose={handleNameModalClose}
+				conversation={conversation}
+			/>
 		</div>
 	);
 }

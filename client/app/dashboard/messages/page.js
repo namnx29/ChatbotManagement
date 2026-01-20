@@ -11,9 +11,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import {
   listAllConversations,
-  listIntegrations,
-  listFacebookConversations,
-  listZaloConversations,
   getConversationMessages,
   getZaloConversationMessages,
   sendConversationMessage,
@@ -58,6 +55,7 @@ export default function ChatManagementPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   // Refs
   const socketRef = useRef(null);
@@ -68,6 +66,10 @@ export default function ChatManagementPage() {
     typeof window !== 'undefined' ? localStorage.getItem('accountId') : null,
     []
   );
+
+  const handleScrollPositionChange = useCallback((atBottom) => {
+    setIsAtBottom(atBottom);
+  }, []);
 
   // Utility: Map message document to client format
   const mapMessageDocToClient = useCallback((doc) => {
@@ -131,6 +133,31 @@ export default function ChatManagementPage() {
       return updated;
     });
   }, []);
+
+  useEffect(() => {
+    if (!isAtBottom || !selectedChat) return;
+
+    const conv = conversations.find(c => c.id === selectedChat.id);
+    if (!conv || !conv.isUnread) return;
+
+    // Mark as read when at bottom
+    (async () => {
+      try {
+        updateConversationInList(selectedChat.id, { isUnread: false });
+        window.dispatchEvent(new CustomEvent('reset-conversation-unread', {
+          detail: { conversations: selectedChat.id }
+        }));
+
+        if (selectedChat.platform === 'zalo') {
+          await markZaloConversationRead(accountId, selectedChat.id);
+        } else {
+          await markConversationRead(accountId, selectedChat.id);
+        }
+      } catch (e) {
+        console.error('Failed to mark conversation read:', e);
+      }
+    })();
+  }, [isAtBottom, selectedChat?.id, conversations, accountId, updateConversationInList]);
 
   // Utility: Clear pending timeout
   const clearPendingTimeout = useCallback((tempId) => {
@@ -205,7 +232,7 @@ export default function ChatManagementPage() {
           ...updated[idx],
           lastMessage: payload.message,
           time: new Date().toISOString(),
-          isUnread: payload.direction !== 'out' && selectedChat?.id !== convId,
+          isUnread: payload.direction !== 'out' && (selectedChat?.id !== convId || !isAtBottom),
         };
 
         // Move to top
@@ -275,7 +302,7 @@ export default function ChatManagementPage() {
         });
 
         // If the conversation is open and we received an incoming message, mark it as read on the server and in UI
-        if (payload.direction === 'in') {
+        if (payload.direction === 'in' && isAtBottom) {
           (async () => {
             try {
               updateConversationInList(convId, { isUnread: false });
@@ -296,7 +323,7 @@ export default function ChatManagementPage() {
     socket.on('new-message', handleNewMessage);
 
     return () => socket.off('new-message');
-  }, [selectedChat?.id, mapMessageDocToClient, clearPendingTimeout]);
+  }, [selectedChat?.id, mapMessageDocToClient, clearPendingTimeout, accountId, updateConversationInList, isAtBottom,]);
 
   // Load initial conversations
   useEffect(() => {
@@ -788,6 +815,7 @@ export default function ChatManagementPage() {
             conversation={selectedChat}
             onSendMessage={handleSendMessage}
             onLoadMore={handleLoadMoreMessages}
+            onScrollPositionChange={handleScrollPositionChange}
           />
         ) : (
           <div

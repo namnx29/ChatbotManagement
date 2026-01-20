@@ -12,12 +12,12 @@ import { io } from 'socket.io-client';
 import {
   listAllConversations,
   getConversationMessages,
-  getZaloConversationMessages,
   sendConversationMessage,
   sendConversationAttachment,
+  markConversationRead,
+  getZaloConversationMessages,
   sendZaloConversationMessage,
   sendZaloConversationAttachment,
-  markConversationRead,
   markZaloConversationRead
 } from '@/lib/api';
 import ChatBox from '@/lib/components/chat/ChatBox';
@@ -774,7 +774,7 @@ export default function ChatManagementPage() {
             icon={<SwapOutlined rotate={90} />}
             style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
           >
-            Gần nhất
+            Mới nhất
           </Button>
           <Button
             icon={<FilterOutlined />}

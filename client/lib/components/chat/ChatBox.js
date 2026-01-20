@@ -8,9 +8,10 @@ import {
 	RobotOutlined,
 	FacebookFilled,
 	InstagramFilled,
-	TagFilled
+	TagFilled,
+	ArrowDownOutlined
 } from '@ant-design/icons';
-import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 
@@ -58,11 +59,13 @@ const getRawDate = (msg) => {
 	return date;
 };
 
-export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
-	const [imageLoaded, setImageLoaded] = useState({});
+export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange }) {
 	const [message, setMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
+	const [showScrollButton, setShowScrollButton] = useState(false);
+	const [hasNewMessages, setHasNewMessages] = useState(false);
+	const [isAtBottom, setIsAtBottom] = useState(true);
 
 	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
 	const isDisconnected = platformStatus.is_connected === false;
@@ -104,13 +107,23 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 			const delta = el.scrollHeight - prevScrollHeightRef.current;
 			el.scrollTop = delta;
 			isPrependingRef.current = false;
-		} else if (messages.length > 0 && !conversation.loadingMore) {
+		} else if (messages.length > 0 && !conversation.loadingMore && !showScrollButton) {
 			el.scrollTop = el.scrollHeight;
 		}
 	}, [messages]);
 
 	const handleScroll = async (e) => {
 		const el = e.currentTarget;
+
+		// Check if user is at bottom (with small threshold for precision)
+		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+		setShowScrollButton(!atBottom);
+		setIsAtBottom(atBottom);
+
+		if (onScrollPositionChange) {
+			onScrollPositionChange(atBottom);
+		}
+		// Load more messages when scrolling to top
 		if (el.scrollTop <= 5 && !conversation.loadingMore && conversation.hasMore) {
 			isPrependingRef.current = true;
 			prevScrollHeightRef.current = el.scrollHeight;
@@ -118,6 +131,15 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 			if (onLoadMore) {
 				await onLoadMore();
 			}
+		}
+	};
+
+	const scrollToBottom = () => {
+		const el = messagesContainerRef.current;
+		if (el) {
+			el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+			setShowScrollButton(false);
+			setHasNewMessages(false);
 		}
 	};
 
@@ -251,6 +273,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 					padding: '20px',
 					background: '#f8f9fa',
 					overflowAnchor: 'none',
+					position: 'relative',
 				}}
 			>
 				{conversation.loadingMore && (
@@ -376,6 +399,30 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore }) {
 						</div>
 					);
 				})}
+				{showScrollButton && (
+					<Button
+						icon={<ArrowDownOutlined />}
+						onClick={scrollToBottom}
+						style={{
+							position: 'sticky',
+							bottom: '10px',
+							left: '50%',
+							transform: 'translateX(-50%)',
+							zIndex: 100,
+							borderRadius: '20px',
+							background: '#6c3fb5',
+							color: 'white',
+							border: hasNewMessages ? '2px solid #52c41a' : 'none',
+							boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+							display: 'flex',
+							alignItems: 'center',
+							gap: '8px',
+							padding: '0 16px',
+							height: '32px'
+						}}
+					>
+					</Button>
+				)}
 				<div ref={messagesEndRef} />
 			</div>
 

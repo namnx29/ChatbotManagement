@@ -143,12 +143,24 @@ def get_all_conversations():
             
             # Check integration status to determine if connected
             integration = None
+            found_platform = 'unknown'
             for p in ['facebook', 'zalo', 'instagram']:
-                integration = integration_model.find_by_platform_and_oa(p, oa_id)
-                if integration:
-                    break
-            
-            is_connected = bool(integration and integration.get('is_active', True)) if integration else False
+                # Find integration by platform, oa_id, AND verify account_id
+                potential_integration = integration_model.find_by_platform_and_oa(p, oa_id)
+                
+                if potential_integration:
+                    # Validate that this integration belongs to the current account
+                    is_owner = str(potential_integration.get('accountId')) == str(account_id)
+                    
+                    if is_owner:
+                        integration = potential_integration
+                        found_platform = p # Use this to correct platform if needed
+                        break
+
+            is_connected = bool(
+                integration and 
+                integration.get('is_active', True)
+            )
             disconnected_at = integration.get('updated_at') if integration and not is_connected else None
             
             # Construct conversation ID in the format expected by message endpoints: platform:oa_id:sender_id

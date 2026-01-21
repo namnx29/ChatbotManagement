@@ -1164,10 +1164,10 @@ def mark_conversation_read(conv_id):
     if platform != 'zalo':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    model = IntegrationModel(current_app.mongo_client)
-    integration = model.find_by_platform_and_oa(platform, oa_id)
-    if integration and integration.get('accountId') != account_id:
-        return jsonify({'success': False, 'message': 'Not authorized'}), 403
+    # model = IntegrationModel(current_app.mongo_client)
+    # integration = model.find_by_platform_and_oa(platform, oa_id)
+    # if integration and integration.get('accountId') != account_id:
+    #     return jsonify({'success': False, 'message': 'Not authorized'}), 403
 
     try:
         from models.conversation import ConversationModel

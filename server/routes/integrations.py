@@ -36,7 +36,6 @@ def list_integrations():
     
     return jsonify({'success': True, 'data': enriched_items}), 200
 
-
 @integrations_bp.route('/<integration_id>/activate', methods=['POST'])
 def activate_integration(integration_id):
     account_id = _get_account_id_from_request()
@@ -118,7 +117,8 @@ def get_all_conversations():
             return jsonify({'success': True, 'data': []}), 200
         
         # Get conversations for all OA IDs
-        conversations = conversation_model.find_all_by_oa_ids(all_oa_ids, limit=2000)
+        conversations = [conversation_model._serialize(conv, current_user_id=account_id) 
+                     for conv in conversation_model.find_all_by_oa_ids(all_oa_ids, limit=2000)]
         
         # Enrich with platform info and integration status
         enriched_conversations = []
@@ -159,8 +159,8 @@ def get_all_conversations():
                 'oa_id': oa_id,
                 'customer_id': conv.get('customer_id'),
                 'platform': platform,
-                'name': customer_info.get('name') or 'Khách hàng',
-                'avatar': customer_info.get('avatar'),
+                'name': conv.get('display_name') or 'Khách hàng',
+                'avatar': conv.get('customer_info', {}).get('avatar') or None,
                 'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
                 'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
                 'unreadCount': conv.get('unread_count', 0),
@@ -179,4 +179,41 @@ def get_all_conversations():
         
     except Exception as e:
         logger.error(f"Error getting all conversations: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+    
+@integrations_bp.route('/conversations/nickname', methods=['POST'])
+def update_conversation_nickname():
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required'}), 400
+
+    data = request.json
+    oa_id = data.get('oa_id')
+    customer_id = data.get('customer_id')
+    nick_name = data.get('nick_name')
+
+    if not oa_id or not customer_id:
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
+
+    try:
+        from models.conversation import ConversationModel
+        model = ConversationModel(current_app.mongo_client)
+        
+        updated_conv = model.update_nickname(
+            oa_id=oa_id, 
+            customer_id=customer_id, 
+            user_id=account_id, 
+            nick_name=nick_name
+        )
+
+        if not updated_conv:
+            return jsonify({'success': False, 'message': 'Conversation not found'}), 404
+
+        return jsonify({
+            'success': True, 
+            'data': model._serialize(updated_conv, current_user_id=account_id)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error updating nickname: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500

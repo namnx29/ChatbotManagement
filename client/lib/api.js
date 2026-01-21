@@ -929,3 +929,29 @@ export async function deleteTrainingDataMultiple(chatbotId, itemIds = []) {
   }
 }
 
+export async function updateConversationNickname(accountId, oaId, customerId, nickname) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/integrations/conversations/nickname`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({
+        oa_id: oaId,
+        customer_id: customerId,
+        nick_name: nickname,
+      }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /integrations/conversations/nickname]:', error);
+    throw error;
+  }
+}

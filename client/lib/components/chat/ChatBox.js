@@ -77,7 +77,7 @@ const getRawDate = (msg) => {
 	return date;
 };
 
-export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange }) {
+export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange, onConversationUpdate }) {
 	const [message, setMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
@@ -223,6 +223,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const handleNameModalClose = () => {
 		setNameModalVisible(false);
 	};
+
+	const handleNicknameSuccess = (updatedData) => {
+        if (onConversationUpdate) {
+            onConversationUpdate(updatedData);
+        }
+    };
 
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
@@ -468,8 +474,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 					<Alert
 						type="warning"
 						showIcon
-						title="Nền tảng không được kết nối"
-						description="Bạn không thể gửi tin nhắn vì nền tảng này đã bị ngắt kết nối. Hãy kết nối lại nền tảng này trong phần tích hợp để tiếp tục nhắn tin."
+						title="Nền tảng không được kết nối hoặc đã bị ngắt kết nối. Hãy kết nối lại nền tảng này trong phần tích hợp để tiếp tục nhắn tin."
 						style={{ marginBottom: '4px' }}
 					/>
 				)}
@@ -489,7 +494,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 						disabled={isDisconnected}
 					/>
 					<Input
-						placeholder={isDisconnected ? "Nền tảng không được kết nối" : "Nhập tin nhắn..."}
+						placeholder={isDisconnected ? "Nền tảng không được kết nối..." : "Nhập tin nhắn..."}
 						value={message}
 						onChange={(e) => setMessage(e.target.value)}
 						onPressEnter={!isDisconnected ? handleSend : null}
@@ -519,6 +524,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 				visible={nameModalVisible}
 				onClose={handleNameModalClose}
 				conversation={conversation}
+				onSuccess={handleNicknameSuccess}
 			/>
 		</div>
 	);

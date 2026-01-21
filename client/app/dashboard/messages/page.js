@@ -168,6 +168,20 @@ export default function ChatManagementPage() {
     }
   }, []);
 
+  // Handler: Update conversation when customer name is changed
+  const handleConversationUpdate = useCallback((updatedConversation) => {
+    // Update the selected chat
+    setSelectedChat(prev => {
+      if (!prev) return prev;
+      return { ...prev, ...updatedConversation };
+    });
+
+    // Update the conversations list
+    updateConversationInList(updatedConversation.id, {
+      name: updatedConversation.name
+    });
+  }, [updateConversationInList]);
+
   // Socket: Initialize connection
   useEffect(() => {
     if (!accountId) return;
@@ -816,6 +830,7 @@ export default function ChatManagementPage() {
             onSendMessage={handleSendMessage}
             onLoadMore={handleLoadMoreMessages}
             onScrollPositionChange={handleScrollPositionChange}
+            onConversationUpdate={handleConversationUpdate}
           />
         ) : (
           <div

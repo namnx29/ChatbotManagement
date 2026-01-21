@@ -20,10 +20,19 @@ class ConversationModel:
         # Index for querying by customer_id
         self.collection.create_index([('customer_id', 1), ('updated_at', -1)])
 
-    def _serialize(self, doc):
+    def _serialize(self, doc, current_user_id=None):
         if not doc:
             return None
         out = dict(doc)
+
+        nickname = out.get('nicknames', {})
+        default_name = out.get('customer_info', {}).get('name', 'Khách hàng')
+
+        if current_user_id and current_user_id in nickname:
+            out['display_name'] = nickname[current_user_id]
+        else:
+            out['display_name'] = default_name
+        
         if out.get('_id') is not None:
             try:
                 out['_id'] = str(out['_id'])
@@ -147,3 +156,16 @@ class ConversationModel:
         cursor = self.collection.find({'oa_id': {'$in': oa_ids}}).sort('updated_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]
         return docs
+
+    def update_nickname(self, oa_id, customer_id, user_id, nick_name):
+        result = self.collection.find_one_and_update(
+            {'oa_id': oa_id, 'customer_id': customer_id},
+            {
+                '$set': {
+                    f'nicknames.{user_id}': nick_name,
+                    'updated_at': datetime.utcnow(),
+                }
+            },
+            return_document=True
+        )
+        return self._serialize(result)

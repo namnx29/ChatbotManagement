@@ -7,7 +7,7 @@ import {
   SwapOutlined,
   FilterOutlined,
 } from '@ant-design/icons';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useTransition } from 'react';
 import { io } from 'socket.io-client';
 import {
   listAllConversations,
@@ -56,6 +56,18 @@ export default function ChatManagementPage() {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      startTransition(() => {
+        setDebouncedSearch(searchQuery);
+      });
+    }, 300);
+
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
 
   // Refs
   const socketRef = useRef(null);
@@ -543,7 +555,6 @@ export default function ChatManagementPage() {
     pendingTimeoutsRef.current.set(tempId, timeoutId);
 
     try {
-      // Send to API (platform-specific)
       if (selectedChat.platform === 'zalo') {
         if (newMessage.image) {
           await sendZaloConversationAttachment(accountId, selectedChat.id, newMessage.image, newMessage.text || null);
@@ -624,18 +635,14 @@ export default function ChatManagementPage() {
     }
   }, [selectedChat, accountId, updateConversationInList, clearPendingTimeout]);
 
-  // Memoized filtered conversations
   const filteredConversations = useMemo(() => {
+    const query = debouncedSearch.trim().toLowerCase();
     return conversations.filter(conv => {
-      if (filterChannel !== 'all' && conv.platform !== filterChannel) {
-        return false;
-      }
-      if (searchQuery && !conv.name.toLowerCase().includes(searchQuery.toLowerCase())) {
-        return false;
-      }
+      if (filterChannel !== 'all' && conv.platform !== filterChannel) return false;
+      if (query && !conv.name.toLowerCase().includes(query)) return false;
       return true;
     });
-  }, [conversations, filterChannel, searchQuery]);
+  }, [conversations, filterChannel, debouncedSearch]);
 
   // Render helper for select options
   const renderSelectLabel = useCallback((text, icon) => (
@@ -788,7 +795,7 @@ export default function ChatManagementPage() {
             icon={<SwapOutlined rotate={90} />}
             style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
           >
-            Mới nhất
+            Chưa đọc
           </Button>
           <Button
             icon={<FilterOutlined />}

@@ -20,6 +20,29 @@ class ImageTooLargeError(Exception):
 PKCE_TTL = 600  # seconds
 
 
+def _emit_socket_to_account(event, payload, account_id):
+    """Emit a socket event to a specific account's room (SECURITY FIX).
+    This ensures only authenticated users of the owning account receive the event.
+    Prevents cross-account data leakage via WebSocket broadcasts.
+    """
+    try:
+        socketio = getattr(current_app, 'socketio', None)
+        if not socketio:
+            return False
+        
+        room = f"account:{account_id}"
+        try:
+            socketio.emit(event, payload, room=room)
+        except TypeError:
+            socketio.emit(event, payload, room=room)
+        
+        logger.debug(f"Emitted {event} to account room {room}")
+        return True
+    except Exception as e:
+        logger.error(f"Socket emit to account failed: {e}")
+        return False
+
+
 from utils.request_helpers import get_account_id_from_request as _get_account_id_from_request
 
 
@@ -566,6 +589,11 @@ def webhook_event():
         direction=direction,
         customer_info=customer_info if customer_info else None,
         increment_unread=(direction == 'in'),
+        chatbot_id=integration.get('chatbotId'),
+        chatbot_info={
+            'name': integration.get('name'),
+            'avatar': integration.get('avatar_url'),
+        },
     )
 
     conversation_id = conversation_doc.get('_id') if conversation_doc else (existing_conv.get('_id') if 'existing_conv' in locals() and existing_conv else None)
@@ -617,6 +645,9 @@ def webhook_event():
     # Build conversation ID for frontend (legacy format)
     conv_id = f"zalo:{integration.get('oa_id')}:{customer_platform_id}"
 
+    # SECURITY FIX: Emit socket events only to the account that owns this integration
+    account_id_owner = integration.get('accountId')
+    
     # Emit socket events
     payload = {
         'platform': 'zalo',
@@ -635,50 +666,28 @@ def webhook_event():
     }
 
     try:
-        socketio = getattr(current_app, 'socketio', None)
-        if socketio:
-            if not deduped:
-                try:
-                    socketio.emit('new-message', payload)
-                    logger.info('Emitted new-message via socket')
-                except TypeError:
-                    socketio.emit('new-message', payload)
-                    logger.info('Emitted new-message via socket (fallback)')
+        if not deduped:
+            # Emit only to the account's room
+            _emit_socket_to_account('new-message', payload, account_id_owner)
+            logger.info(f'Emitted new-message to account {account_id_owner} via socket')
 
-                # Emit conversation update
-                try:
-                    socketio.emit('update-conversation', {
-                        'conversation_id': conversation_id,
-                        'conv_id': conv_id,
-                        'oa_id': integration.get('oa_id'),
-                        'customer_id': customer_id,
-                        'last_message': {
-                            'text': message,
-                            'created_at': datetime.utcnow().isoformat() + 'Z',
-                        },
-                        'unread_count': conversation_doc.get('unread_count', 0),
-                        'customer_info': conversation_doc.get('customer_info', {}),
-                        'platform': 'zalo',
-                    })
-                    logger.info('Emitted update-conversation via socket')
-                except TypeError:
-                    socketio.emit('update-conversation', {
-                        'conversation_id': conversation_id,
-                        'conv_id': conv_id,
-                        'oa_id': integration.get('oa_id'),
-                        'customer_id': customer_id,
-                        'last_message': {
-                            'text': message,
-                            'created_at': datetime.utcnow().isoformat() + 'Z',
-                        },
-                        'unread_count': conversation_doc.get('unread_count', 0),
-                        'customer_info': conversation_doc.get('customer_info', {}),
-                        'platform': 'zalo',
-                    })
-            else:
-                logger.info('Deduped outgoing echo; skipping socket emits')
+            # Emit conversation update
+            _emit_socket_to_account('update-conversation', {
+                'conversation_id': conversation_id,
+                'conv_id': conv_id,
+                'oa_id': integration.get('oa_id'),
+                'customer_id': customer_id,
+                'last_message': {
+                    'text': message,
+                    'created_at': datetime.utcnow().isoformat() + 'Z',
+                },
+                'unread_count': conversation_doc.get('unread_count', 0),
+                'customer_info': conversation_doc.get('customer_info', {}),
+                'platform': 'zalo',
+            }, account_id_owner)
+            logger.info(f'Emitted update-conversation to account {account_id_owner} via socket')
         else:
-            logger.info('SocketIO not initialized; skipping emit')
+            logger.info('Deduped outgoing echo; skipping socket emits')
     except Exception as e:
         logger.error(f"Failed to emit socket event: {e}")
 
@@ -926,6 +935,28 @@ def list_conversations():
     if not oa_id:
         return jsonify({'success': False, 'message': 'oa_id is required'}), 400
 
+    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    try:
+        integration_model = IntegrationModel(current_app.mongo_client)
+        integration = integration_model.find_by_platform_and_oa('zalo', oa_id)
+        # Fallback: if not found by top-level oa_id, try meta.profile.oa_id
+        if not integration:
+            try:
+                raw = integration_model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+                if raw:
+                    integration = integration_model._serialize(raw)
+            except Exception:
+                integration = None
+        
+        if not integration:
+            return jsonify({'success': False, 'message': 'Integration not found'}), 404
+        if integration.get('accountId') != account_id:
+            logger.warning(f"Unauthorized access attempt: account {account_id} tried to access oa_id {oa_id} owned by {integration.get('accountId')}")
+            return jsonify({'success': False, 'message': 'Unauthorized access to this OA'}), 403
+    except Exception as e:
+        logger.error(f"Error validating integration ownership: {e}")
+        return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
+
     try:
         from models.conversation import ConversationModel
         from models.customer import CustomerModel
@@ -1072,12 +1103,38 @@ def list_conversations():
 
 @zalo_bp.route('/api/zalo/conversations/<path:conv_id>/messages', methods=['GET'])
 def get_conversation_messages(conv_id):
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
     parts = conv_id.split(':')
     if len(parts) != 3:
         return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
     platform, oa_id, sender_id = parts
     if platform != 'zalo':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    try:
+        model = IntegrationModel(current_app.mongo_client)
+        integration = model.find_by_platform_and_oa(platform, oa_id)
+        # Fallback: if not found by top-level oa_id, try meta.profile.oa_id
+        if not integration:
+            try:
+                raw = model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+                if raw:
+                    integration = model._serialize(raw)
+            except Exception:
+                integration = None
+        
+        if not integration:
+            return jsonify({'success': False, 'message': 'Integration not found'}), 404
+        if integration.get('accountId') != account_id:
+            logger.warning(f"Unauthorized access attempt: account {account_id} tried to access messages for oa_id {oa_id}")
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    except Exception as e:
+        logger.error(f"Error validating integration ownership: {e}")
+        return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
 
     # Pagination parameters: default to 20 messages per page for chat UI
     try:
@@ -1164,10 +1221,27 @@ def mark_conversation_read(conv_id):
     if platform != 'zalo':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    # model = IntegrationModel(current_app.mongo_client)
-    # integration = model.find_by_platform_and_oa(platform, oa_id)
-    # if integration and integration.get('accountId') != account_id:
-    #     return jsonify({'success': False, 'message': 'Not authorized'}), 403
+    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    try:
+        model = IntegrationModel(current_app.mongo_client)
+        integration = model.find_by_platform_and_oa(platform, oa_id)
+        # Fallback: if not found by top-level oa_id, try meta.profile.oa_id
+        if not integration:
+            try:
+                raw = model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+                if raw:
+                    integration = model._serialize(raw)
+            except Exception:
+                integration = None
+        
+        if not integration:
+            return jsonify({'success': False, 'message': 'Integration not found'}), 404
+        if integration.get('accountId') != account_id:
+            logger.warning(f"Unauthorized access attempt: account {account_id} tried to mark conversation as read for oa_id {oa_id}")
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    except Exception as e:
+        logger.error(f"Error validating integration ownership: {e}")
+        return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
 
     try:
         from models.conversation import ConversationModel
@@ -1292,7 +1366,15 @@ def send_conversation_message(conv_id):
 
         conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
         if not conversation_doc:
-            conversation_doc = conversation_model.upsert_conversation(oa_id=oa_id, customer_id=customer_id)
+            conversation_doc = conversation_model.upsert_conversation(
+                oa_id=oa_id, 
+                customer_id=customer_id,
+                chatbot_id=integration.get('chatbotId'),
+                chatbot_info={
+                    'name': integration.get('name'),
+                    'avatar': integration.get('avatar_url'),
+                },
+            )
 
         conversation_id = conversation_doc.get('_id')
         if conversation_id and not isinstance(conversation_id, str):
@@ -1335,6 +1417,11 @@ def send_conversation_message(conv_id):
             last_message_text=display_text,
             last_message_created_at=datetime.utcnow(),
             direction='out',
+            chatbot_id=integration.get('chatbotId'),
+            chatbot_info={
+                'name': integration.get('name'),
+                'avatar': integration.get('avatar_url'),
+            },
         )
 
         # Prepare metadata
@@ -1393,9 +1480,10 @@ def send_conversation_message(conv_id):
                     message_payload['image'] = image
                     message_payload['has_attachment'] = True
                 
-                socketio.emit('new-message', message_payload)
+                # SECURITY FIX: Emit only to the account's room
+                _emit_socket_to_account('new-message', message_payload, integration.get('accountId'))
 
-                socketio.emit('update-conversation', {
+                _emit_socket_to_account('update-conversation', {
                     'conversation_id': conversation_id,
                     'conv_id': conv_id,
                     'oa_id': oa_id,
@@ -1407,8 +1495,8 @@ def send_conversation_message(conv_id):
                     'unread_count': conversation_doc.get('unread_count', 0),
                     'customer_info': conversation_doc.get('customer_info', {}),
                     'platform': 'zalo',
-                })
-                logger.info(f"Emitted socket events for outgoing message with image: {bool(image)}")
+                }, integration.get('accountId'))
+                logger.info(f"Emitted socket events for outgoing message to account {integration.get('accountId')}")
         except Exception as e:
             logger.error(f"Failed to emit socket event for outgoing message: {e}")
 

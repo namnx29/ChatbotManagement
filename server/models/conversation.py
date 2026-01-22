@@ -19,6 +19,8 @@ class ConversationModel:
         self.collection.create_index([('oa_id', 1), ('updated_at', -1)])
         # Index for querying by customer_id
         self.collection.create_index([('customer_id', 1), ('updated_at', -1)])
+        # Index for querying by chatbot_id (for account isolation)
+        self.collection.create_index([('chatbot_id', 1), ('updated_at', -1)])
 
     def _serialize(self, doc, current_user_id=None):
         if not doc:
@@ -52,12 +54,14 @@ class ConversationModel:
         return out
 
     def upsert_conversation(self, oa_id, customer_id, last_message_text=None, last_message_created_at=None, 
-                           direction='in', customer_info=None, increment_unread=False):
+                           direction='in', customer_info=None, increment_unread=False, chatbot_id=None, chatbot_info=None):
         """
         Upsert a conversation. Updates last_message and unread_count.
         - direction: 'in' for incoming (from customer), 'out' for outgoing (from staff)
         - increment_unread: if True and direction='in', increment unread_count
         - customer_info: dict with {name, avatar} to denormalize customer info
+        - chatbot_id: the chatbot this conversation belongs to (for account isolation)
+        - chatbot_info: dict with {name, avatar} to denormalize chatbot info
         Returns the conversation document.
         """
         now = datetime.utcnow()
@@ -68,6 +72,15 @@ class ConversationModel:
             'customer_id': customer_id,
             'updated_at': now,
         }
+        
+        if chatbot_id:
+            update_doc['chatbot_id'] = chatbot_id
+        
+        if chatbot_info:
+            update_doc['chatbot_info'] = {
+                'name': chatbot_info.get('name'),
+                'avatar': chatbot_info.get('avatar'),
+            }
         
         if last_message_text is not None:
             update_doc['last_message'] = {
@@ -154,6 +167,14 @@ class ConversationModel:
         if not oa_ids:
             return []
         cursor = self.collection.find({'oa_id': {'$in': oa_ids}}).sort('updated_at', -1).skip(skip).limit(limit)
+        docs = [self._serialize(d) for d in list(cursor)]
+        return docs
+
+    def find_by_chatbot_id(self, chatbot_id, limit=2000, skip=0):
+        """Find all conversations for a chatbot_id, sorted by updated_at descending"""
+        if not chatbot_id:
+            return []
+        cursor = self.collection.find({'chatbot_id': chatbot_id}).sort('updated_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]
         return docs
 

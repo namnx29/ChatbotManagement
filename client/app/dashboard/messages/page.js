@@ -198,7 +198,13 @@ export default function ChatManagementPage() {
   useEffect(() => {
     if (!accountId) return;
 
-    socketRef.current = io(SOCKET_URL, SOCKET_CONFIG);
+    // SECURITY FIX: Pass account_id when connecting to WebSocket
+    socketRef.current = io(SOCKET_URL, {
+      ...SOCKET_CONFIG,
+      auth: {
+        account_id: accountId,  // Pass account_id to backend for room filtering
+      }
+    });
 
     return () => {
       if (socketRef.current) {

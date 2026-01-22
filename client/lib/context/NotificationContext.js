@@ -100,7 +100,13 @@ export function NotificationProvider({ children }) {
   useEffect(() => {
     if (!accountId) return;
 
-    const socket = io(SOCKET_URL, SOCKET_CONFIG);
+    // SECURITY FIX: Pass account_id when connecting to WebSocket
+    const socket = io(SOCKET_URL, {
+      ...SOCKET_CONFIG,
+      auth: {
+        account_id: accountId,  // Pass account_id to backend
+      }
+    });
     socketRef.current = socket;
 
     // Setup new message listener

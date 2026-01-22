@@ -16,20 +16,41 @@ logger = logging.getLogger(__name__)
 PKCE_TTL = 600  # seconds (we reuse state storage for flow)
 
 
-def _emit_socket(event, payload):
-    """Emit a socket event in a backwards-compatible way.
-    Some server instances accept `broadcast=True`, others (raw python-socketio Server)
-    don't. Try with `broadcast=True` first and fall back to a plain emit.
+def _emit_socket(event, payload, account_id=None, to_room=None):
+    """Emit a socket event to a specific account room or broadcast.
+    
+    Args:
+        event: Event name
+        payload: Event payload
+        account_id: If provided, emit only to this account's room (SECURITY FIX)
+        to_room: Optional specific room name (for advanced use)
+    
+    Security: When account_id is provided, the event is sent only to users
+    in that account's room, preventing cross-account data leakage.
     """
     try:
         socketio = getattr(current_app, 'socketio', None)
         if not socketio:
             return False
-        try:
-            socketio.emit(event, payload, broadcast=True)
-        except TypeError:
-            # fall back for servers that don't accept broadcast kw
-            socketio.emit(event, payload)
+        
+        # SECURITY FIX: If account_id provided, emit to account-specific room
+        if account_id:
+            room = to_room or f"account:{account_id}"
+            try:
+                socketio.emit(event, payload, room=room)
+            except TypeError:
+                # Fallback for older versions
+                socketio.emit(event, payload, room=room)
+            logger.debug(f"Emitted {event} to room {room}")
+        else:
+            # Legacy: broadcast to all (use only for public events)
+            try:
+                socketio.emit(event, payload, broadcast=True)
+            except TypeError:
+                # fall back for servers that don't accept broadcast kw
+                socketio.emit(event, payload)
+            logger.debug(f"Broadcasted {event} to all clients")
+        
         return True
     except Exception as e:
         logger.error(f"Socket emit failed: {e}")
@@ -454,6 +475,11 @@ def webhook_event():
                     'avatar': sender_profile.get('avatar') if sender_profile else None,
                 },
                 increment_unread=(direction == 'in'),  # Increment for any incoming message
+                chatbot_id=integration.get('chatbotId'),
+                chatbot_info={
+                    'name': integration.get('name'),
+                    'avatar': integration.get('avatar_url'),
+                },
             )
             
             conversation_id = conversation_doc.get('_id')
@@ -520,11 +546,14 @@ def webhook_event():
                 'sender_profile': sender_profile,
             }
             
+            # SECURITY FIX: Emit socket events only to the account that owns this integration
+            account_id_owner = integration.get('accountId')
+            
             # Emit new message event (unless deduped by outgoing echo)
             try:
                 if not deduped:
-                    _emit_socket('new-message', payload)
-                    logger.info('Emitted new-message via socket')
+                    _emit_socket('new-message', payload, account_id=account_id_owner)
+                    logger.info(f'Emitted new-message to account {account_id_owner} via socket')
             except Exception as e:
                 logger.error(f'Failed to emit new-message via socket: {e}')
             
@@ -543,8 +572,8 @@ def webhook_event():
                         'unread_count': conversation_doc.get('unread_count', 0),
                         'customer_info': conversation_doc.get('customer_info', {}),
                         'platform': 'facebook',
-                    })
-                    logger.info('Emitted update-conversation via socket')
+                    }, account_id=account_id_owner)
+                    logger.info(f'Emitted update-conversation to account {account_id_owner} via socket')
             except Exception:
                 logger.error('Failed to emit update-conversation via socket')
 
@@ -560,6 +589,19 @@ def list_conversations():
     oa_id = request.args.get('oa_id') or (request.get_json(silent=True) or {}).get('oa_id')
     if not oa_id:
         return jsonify({'success': False, 'message': 'oa_id is required'}), 400
+
+    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    try:
+        integration_model = IntegrationModel(current_app.mongo_client)
+        integration = integration_model.find_by_platform_and_oa('facebook', oa_id)
+        if not integration:
+            return jsonify({'success': False, 'message': 'Integration not found'}), 404
+        if integration.get('accountId') != account_id:
+            logger.warning(f"Unauthorized access attempt: account {account_id} tried to access oa_id {oa_id} owned by {integration.get('accountId')}")
+            return jsonify({'success': False, 'message': 'Unauthorized access to this page'}), 403
+    except Exception as e:
+        logger.error(f"Error validating integration ownership: {e}")
+        return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
 
     try:
         from models.conversation import ConversationModel
@@ -715,12 +757,29 @@ def list_conversations():
 
 @facebook_bp.route('/api/facebook/conversations/<path:conv_id>/messages', methods=['GET'])
 def get_conversation_messages(conv_id):
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
     parts = conv_id.split(':')
     if len(parts) != 3:
         return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
     platform, oa_id, sender_id = parts
     if platform != 'facebook':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    try:
+        model = IntegrationModel(current_app.mongo_client)
+        integration = model.find_by_platform_and_oa(platform, oa_id)
+        if not integration:
+            return jsonify({'success': False, 'message': 'Integration not found'}), 404
+        if integration.get('accountId') != account_id:
+            logger.warning(f"Unauthorized access attempt: account {account_id} tried to access messages for oa_id {oa_id}")
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    except Exception as e:
+        logger.error(f"Error validating integration ownership: {e}")
+        return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
 
     try:
         limit = int(request.args.get('limit', 20))
@@ -874,6 +933,11 @@ def send_conversation_message(conv_id):
             conversation_doc = conversation_model.upsert_conversation(
                 oa_id=oa_id,
                 customer_id=customer_id,
+                chatbot_id=integration.get('chatbotId'),
+                chatbot_info={
+                    'name': integration.get('name'),
+                    'avatar': integration.get('avatar_url'),
+                },
             )
         
         conversation_id = conversation_doc.get('_id')
@@ -898,7 +962,15 @@ def send_conversation_message(conv_id):
             last_message_text=text if text else ("Tệp đính kèm" if image else None),
             last_message_created_at=datetime.utcnow(),
             direction='out',
+            chatbot_id=integration.get('chatbotId'),
+            chatbot_info={
+                'name': integration.get('name'),
+                'avatar': integration.get('avatar_url'),
+            },
         )
+        
+        # SECURITY FIX: Emit socket events only to the account that owns this integration
+        account_id_owner = integration.get('accountId')
         
         # persist outgoing message
         page_profile = {'name': integration.get('name'), 'avatar': integration.get('avatar_url')}
@@ -933,7 +1005,7 @@ def send_conversation_message(conv_id):
                 'sent_at': datetime.utcnow().isoformat() + 'Z',
                 'sender_profile': page_profile,
                 'recipient_profile': recipient_profile,
-            })
+            }, account_id=account_id_owner)
             
             # Emit conversation update
             _emit_socket('update-conversation', {
@@ -948,7 +1020,7 @@ def send_conversation_message(conv_id):
                 'unread_count': conversation_doc.get('unread_count', 0),
                 'customer_info': conversation_doc.get('customer_info', {}),
                 'platform': 'facebook',
-            })
+            }, account_id=account_id_owner)
         except Exception as e:
             logger.error(f"Failed to emit socket event for outgoing message: {e}")
         return jsonify({'success': True, 'data': {'sent': sent_doc, 'send_response': send_resp}}), 200

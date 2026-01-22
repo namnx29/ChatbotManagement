@@ -91,7 +91,67 @@ def create_app(env=None):
     app.mongo_client = mongo_client
 
     # Initialize Socket.IO
-    app.socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+    app.socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', manage_middleware=False)
+
+    # SECURITY FIX: Register WebSocket connection handler to join account-specific rooms
+    @app.socketio.on('connect')
+    def handle_connect(auth):
+        """Handle WebSocket connection and join account-specific room.
+        
+        Args:
+            auth: Authentication data passed from client (dict with account_id)
+        """
+        try:
+            from flask_socketio import join_room
+            from flask import request, session
+            
+            account_id = None
+            
+            # Try multiple ways to get account_id
+            # 1. From auth parameter passed by client
+            if auth and isinstance(auth, dict):
+                account_id = auth.get('account_id') or auth.get('accountId')
+                logger.debug(f"Got account_id from auth param: {account_id}")
+            
+            # 2. From query parameters
+            if not account_id:
+                account_id = request.args.get('account_id') or request.args.get('accountId')
+                if account_id:
+                    logger.debug(f"Got account_id from query params: {account_id}")
+            
+            # 3. From session cookie
+            if not account_id:
+                try:
+                    account_id = session.get('account_id') or session.get('accountId')
+                    if account_id:
+                        logger.debug(f"Got account_id from session: {account_id}")
+                except Exception:
+                    pass
+            
+            # 4. Try Flask-Login current_user (backup method)
+            if not account_id:
+                try:
+                    from flask_login import current_user
+                    if current_user and current_user.is_authenticated:
+                        account_id = current_user.get_id()
+                        logger.debug(f"Got account_id from current_user: {account_id}")
+                except Exception as e:
+                    logger.debug(f"Could not get account_id from current_user: {e}")
+            
+            # If we have account_id, join the room
+            if account_id:
+                room = f"account:{account_id}"
+                join_room(room)
+                logger.info(f"✅ User {account_id} connected and joined room {room}")
+                return True  # Allow connection
+            else:
+                # Cannot identify account - reject connection
+                logger.warning(f"❌ WebSocket connection rejected: Could not identify account_id. Auth: {auth}")
+                return False  # Reject connection
+                
+        except Exception as e:
+            logger.error(f"Error in WebSocket connect handler: {e}", exc_info=True)
+            return False  # Reject connection on error
 
     # Initialize APScheduler for token refresh jobs
     scheduler = APScheduler()

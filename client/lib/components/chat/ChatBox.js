@@ -4,7 +4,7 @@ import { Avatar, Input, Button, Switch, Image, Alert } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
-	SettingOutlined,
+	InfoCircleOutlined,
 	RobotOutlined,
 	EditOutlined,
 	TagFilled,
@@ -225,10 +225,10 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	};
 
 	const handleNicknameSuccess = (updatedData) => {
-        if (onConversationUpdate) {
-            onConversationUpdate(updatedData);
-        }
-    };
+		if (onConversationUpdate) {
+			onConversationUpdate(updatedData);
+		}
+	};
 
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
@@ -255,11 +255,22 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							<Button type="text" size="small" onClick={handleNameModalOpen} icon={<EditOutlined />} />
 						</div>
 						<div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-							{platformIcons[conversation.platform]}
-							<span style={{ fontSize: '13px', color: '#666' }}>
-								{conversation.platform === 'facebook' ? 'Facebook' :
-									conversation.platform === 'instagram' ? 'Instagram' : 'Zalo'}
-							</span>
+							{conversation.chatbot_info ? (
+								<>
+									<Avatar size={16} src={conversation.chatbot_info.avatar} />
+									<span style={{ fontSize: '13px', color: '#666' }}>
+										{conversation.chatbot_info.name}
+									</span>
+								</>
+							) : (
+								<>
+									{platformIcons[conversation.platform]}
+									<span style={{ fontSize: '13px', color: '#666' }}>
+										{conversation.platform === 'facebook' ? 'Facebook' :
+											conversation.platform === 'instagram' ? 'Instagram' : 'Zalo'}
+									</span>
+								</>
+							)}
 							{conversation.tag && (
 								<TagFilled style={{ color: tagColors['completed'] }} />
 							)}
@@ -290,7 +301,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							size="small"
 						/>
 					</div>
-					<SettingOutlined
+					<InfoCircleOutlined
 						style={{ fontSize: '18px', color: '#666', cursor: 'pointer' }}
 					/>
 				</div>

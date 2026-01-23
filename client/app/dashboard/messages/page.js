@@ -198,7 +198,6 @@ export default function ChatManagementPage() {
   useEffect(() => {
     if (!accountId) return;
 
-    // SECURITY FIX: Pass account_id when connecting to WebSocket
     socketRef.current = io(SOCKET_URL, {
       ...SOCKET_CONFIG,
       auth: {
@@ -378,7 +377,8 @@ export default function ChatManagementPage() {
           messages: [],
           oa_id: c.oa_id,
           customer_id: c.customer_id,
-          platform_status: c.platform_status || { is_connected: true, disconnected_at: null }
+          platform_status: c.platform_status || { is_connected: true, disconnected_at: null },
+          chatbot_info: c.chatbot_info || {}
         }));
 
         const sortedConversations = allConversations.sort((a, b) => {

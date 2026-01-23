@@ -459,7 +459,9 @@ def webhook_event():
     from models.customer import CustomerModel
     from models.conversation import ConversationModel
     from models.message import MessageModel
-    
+    from models.chatbot import ChatbotModel
+
+    chatbot_model = ChatbotModel(current_app.mongo_client)
     customer_model = CustomerModel(current_app.mongo_client)
     conversation_model = ConversationModel(current_app.mongo_client)
     message_model = MessageModel(current_app.mongo_client)
@@ -580,6 +582,8 @@ def webhook_event():
                 preview_text = 'Tệp đính kèm'
     except Exception:
         preview_text = preview_text
+    
+    chatbot_data = chatbot_model.get_chatbot(integration.get('chatbotId')) if integration.get('chatbotId') else None
 
     conversation_doc = conversation_model.upsert_conversation(
         oa_id=resolved_oa_id,
@@ -591,8 +595,8 @@ def webhook_event():
         increment_unread=(direction == 'in'),
         chatbot_id=integration.get('chatbotId'),
         chatbot_info={
-            'name': integration.get('name'),
-            'avatar': integration.get('avatar_url'),
+            'name': chatbot_data.get('name') if chatbot_data else None,
+            'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
         },
     )
 
@@ -1354,7 +1358,9 @@ def send_conversation_message(conv_id):
         from models.customer import CustomerModel
         from models.conversation import ConversationModel
         from models.message import MessageModel
+        from models.chatbot import ChatbotModel
 
+        chatbot_model = ChatbotModel(current_app.mongo_client)
         customer_model = CustomerModel(current_app.mongo_client)
         conversation_model = ConversationModel(current_app.mongo_client)
         message_model = MessageModel(current_app.mongo_client)
@@ -1364,6 +1370,8 @@ def send_conversation_message(conv_id):
         if not customer_doc:
             customer_doc = customer_model.upsert_customer(platform='zalo', platform_specific_id=sender_id)
 
+        chatbot_data = chatbot_model.get_chatbot_by_id(integration.get('chatbotId'))
+
         conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
         if not conversation_doc:
             conversation_doc = conversation_model.upsert_conversation(
@@ -1371,8 +1379,8 @@ def send_conversation_message(conv_id):
                 customer_id=customer_id,
                 chatbot_id=integration.get('chatbotId'),
                 chatbot_info={
-                    'name': integration.get('name'),
-                    'avatar': integration.get('avatar_url'),
+                    'name': chatbot_data.get('name') if chatbot_data else None,
+                    'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
                 },
             )
 
@@ -1419,8 +1427,8 @@ def send_conversation_message(conv_id):
             direction='out',
             chatbot_id=integration.get('chatbotId'),
             chatbot_info={
-                'name': integration.get('name'),
-                'avatar': integration.get('avatar_url'),
+                'name': chatbot_data.get('name') if chatbot_data else None,
+                'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
             },
         )
 

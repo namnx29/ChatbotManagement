@@ -124,8 +124,9 @@ def get_all_conversations():
         enriched_conversations = []
         for chatbot in account_chatbots:
             chatbot_id = chatbot.get('id')
+            # SECURITY FIX: Pass account_id to ensure account isolation
             conversations = [conversation_model._serialize(conv, current_user_id=account_id) 
-                           for conv in conversation_model.find_by_chatbot_id(chatbot_id, limit=2000)]
+                           for conv in conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, account_id=account_id)]
             
             for conv in conversations:
                 oa_id = conv.get('oa_id')
@@ -210,11 +211,13 @@ def update_conversation_nickname():
         from models.conversation import ConversationModel
         model = ConversationModel(current_app.mongo_client)
         
+        # SECURITY FIX: Include account_id when updating nickname
         updated_conv = model.update_nickname(
             oa_id=oa_id, 
             customer_id=customer_id, 
             user_id=account_id, 
-            nick_name=nick_name
+            nick_name=nick_name,
+            account_id=account_id,  # SECURITY FIX: Account isolation
         )
 
         if not updated_conv:

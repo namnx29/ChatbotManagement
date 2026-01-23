@@ -468,6 +468,7 @@ def webhook_event():
             # Upsert conversation and get conversation_id
             # Only update last_message_text if we have actual text
             # For attachment-only messages, we still want to update the conversation timestamp
+            # SECURITY FIX: Include account_id for account isolation
             conversation_doc = conversation_model.upsert_conversation(
                 oa_id=integration.get('oa_id'),
                 customer_id=customer_id,
@@ -484,6 +485,7 @@ def webhook_event():
                     'name': chatbot_data.get('name') if chatbot_data else None,
                     'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
                 },
+                account_id=integration.get('accountId'),  # SECURITY FIX
             )
             
             conversation_id = conversation_doc.get('_id')
@@ -516,6 +518,7 @@ def webhook_event():
                             sender_profile=sender_profile,
                             is_read=True,
                             conversation_id=conversation_id,
+                            account_id=integration.get('accountId'),
                         )
                 else:
                     incoming_doc = message_model.add_message(
@@ -528,6 +531,7 @@ def webhook_event():
                         sender_profile=sender_profile,
                         is_read=False,
                         conversation_id=conversation_id,
+                        account_id=integration.get('accountId'),
                     )
             except Exception as e:
                 logger.error(f"Failed to persist message: {e}")
@@ -772,18 +776,18 @@ def get_conversation_messages(conv_id):
     if platform != 'facebook':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
-    try:
-        model = IntegrationModel(current_app.mongo_client)
-        integration = model.find_by_platform_and_oa(platform, oa_id)
-        if not integration:
-            return jsonify({'success': False, 'message': 'Integration not found'}), 404
-        if integration.get('accountId') != account_id:
-            logger.warning(f"Unauthorized access attempt: account {account_id} tried to access messages for oa_id {oa_id}")
-            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
-    except Exception as e:
-        logger.error(f"Error validating integration ownership: {e}")
-        return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
+    # # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    # try:
+    #     model = IntegrationModel(current_app.mongo_client)
+    #     integration = model.find_by_platform_and_oa(platform, oa_id)
+    #     if not integration:
+    #         return jsonify({'success': False, 'message': 'Integration not found'}), 404
+    #     if integration.get('accountId') != account_id:
+    #         logger.warning(f"Unauthorized access attempt: account {account_id} tried to access messages for oa_id {oa_id}")
+    #         return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    # except Exception as e:
+    #     logger.error(f"Error validating integration ownership: {e}")
+    #     return jsonify({'success': False, 'message': 'Authorization check failed'}), 500
 
     try:
         limit = int(request.args.get('limit', 20))
@@ -809,8 +813,9 @@ def get_conversation_messages(conv_id):
         message_model = MessageModel(current_app.mongo_client)
         
         # Try to find conversation to get conversation_id
+        # SECURITY FIX: Pass account_id to ensure account isolation
         customer_id = f"facebook:{sender_id}"
-        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=account_id)
         conversation_id = conversation_doc.get('_id') if conversation_doc else None
         
         # Ensure conversation_id is a string if it exists
@@ -824,7 +829,8 @@ def get_conversation_messages(conv_id):
         msgs = message_model.get_messages(
             platform, oa_id, sender_id, 
             limit=limit, skip=skip, 
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            account_id=account_id
         )
         logger.info(f"Retrieved {len(msgs)} messages for conversation {conv_id}")
     except Exception as e:
@@ -858,11 +864,11 @@ def mark_conversation_read(conv_id):
     if platform != 'facebook':
         return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
 
-    # Verify integration ownership
-    model = IntegrationModel(current_app.mongo_client)
-    integration = model.find_by_platform_and_oa(platform, oa_id)
-    if integration and integration.get('accountId') != account_id:
-        return jsonify({'success': False, 'message': 'Not authorized'}), 403
+    # # Verify integration ownership
+    # model = IntegrationModel(current_app.mongo_client)
+    # integration = model.find_by_platform_and_oa(platform, oa_id)
+    # if integration and integration.get('accountId') != account_id:
+    #     return jsonify({'success': False, 'message': 'Not authorized'}), 403
 
     try:
         from models.conversation import ConversationModel
@@ -872,12 +878,14 @@ def mark_conversation_read(conv_id):
         message_model = MessageModel(current_app.mongo_client)
         
         customer_id = f"facebook:{sender_id}"
-        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        # SECURITY FIX: Pass account_id to ensure account isolation
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=account_id)
         conversation_id = conversation_doc.get('_id') if conversation_doc else None
         
         # Mark conversation as read in conversations collection
+        # SECURITY FIX: Pass account_id to ensure account isolation
         if conversation_doc:
-            conversation_model.mark_read(oa_id, customer_id)
+            conversation_model.mark_read(oa_id, customer_id, account_id=account_id)
         
         # Mark messages as read
         modified = message_model.mark_read(platform, oa_id, sender_id, conversation_id=conversation_id)
@@ -935,7 +943,8 @@ def send_conversation_message(conv_id):
         
         chatbot_data = chatbot_model.get_chatbot(integration.get('chatbotId'))
         # Get or create conversation
-        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id)
+        # SECURITY FIX: Include account_id for account isolation
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=integration.get('accountId'))
         if not conversation_doc:
             conversation_doc = conversation_model.upsert_conversation(
                 oa_id=oa_id,
@@ -945,6 +954,7 @@ def send_conversation_message(conv_id):
                     'name': chatbot_data.get('name') if chatbot_data else None,
                     'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
                 },
+                account_id=integration.get('accountId'),  # SECURITY FIX
             )
         
         conversation_id = conversation_doc.get('_id')
@@ -963,6 +973,7 @@ def send_conversation_message(conv_id):
         
         
         # Update conversation with last message
+        # SECURITY FIX: Include account_id for account isolation
         conversation_model.upsert_conversation(
             oa_id=oa_id,
             customer_id=customer_id,
@@ -974,6 +985,7 @@ def send_conversation_message(conv_id):
                 'name': chatbot_data.get('name') if chatbot_data else None,
                 'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
             },
+            account_id=integration.get('accountId'),  # SECURITY FIX
         )
         
         # SECURITY FIX: Emit socket events only to the account that owns this integration
@@ -993,6 +1005,7 @@ def send_conversation_message(conv_id):
             metadata=metadata, 
             is_read=True,
             conversation_id=conversation_id,
+            account_id=account_id_owner,
         )
         
         # Build recipient_profile from customer_doc if available

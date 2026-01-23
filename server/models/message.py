@@ -20,6 +20,10 @@ class MessageModel:
         self.collection.create_index([('conversation_id', 1), ('created_at', -1)])
         self.collection.create_index([('conversation_id', 1)])
 
+        self.collection.create_index([('accountId', 1), ('platform', 1), ('oa_id', 1), ('created_at', -1)])
+        self.collection.create_index([('accountId', 1), ('conversation_id', 1), ('created_at', -1)])
+
+
     def _serialize(self, doc):
         """Return a fully JSON-serializable representation of a message document.
         This normalizes ObjectId -> str, datetimes -> ISO strings, and recursively
@@ -64,11 +68,12 @@ class MessageModel:
 
         return out
 
-    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None):
+    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None):
         """
         Add a message. 
         - conversation_id: Optional ObjectId string of conversation. If provided, this is the new way.
         - sender_profile: Optional dict like {name, avatar} describing the sender.
+        - account_id: SECURITY FIX - The account that owns this message (for isolation when integration transfers)
         """
         now = datetime.utcnow()
         doc = {
@@ -84,21 +89,31 @@ class MessageModel:
             'updated_at': now,
         }
         
+        if account_id:
+            doc['accountId'] = account_id
+
         # Add conversation_id if provided (new structure)
+        # SECURITY FIX: Ensure conversation_id is always properly stored
         if conversation_id:
             try:
                 # Handle both string and ObjectId formats
                 if isinstance(conversation_id, ObjectId):
                     doc['conversation_id'] = conversation_id
+                    logger.info(f"Added message with conversation_id (ObjectId): {conversation_id}")
                 else:
-                    doc['conversation_id'] = ObjectId(conversation_id)
+                    # conversation_id is a string, convert to ObjectId
+                    conv_id_obj = ObjectId(conversation_id)
+                    doc['conversation_id'] = conv_id_obj
+                    logger.info(f"Added message with conversation_id (converted from string): {conversation_id} -> {conv_id_obj}")
             except Exception as e:
-                logger.warning(f"Invalid conversation_id format: {conversation_id}, error: {e}")
+                logger.error(f"CRITICAL: Failed to convert conversation_id '{conversation_id}' to ObjectId: {e}. Message will be stored WITHOUT conversation_id!")
+                # DON'T store conversation_id if conversion fails
+                # Message will be stored but unfindable by conversation_id
         
         res = self.collection.insert_one(doc)
         doc['_id'] = res.inserted_id
         try:
-            logger.info(f"Added message: platform={platform}, oa_id={oa_id}, sender_id={sender_id}, direction={direction}, conversation_id={conversation_id}, _id={doc['_id']}")
+            logger.info(f"Added message: platform={platform}, oa_id={oa_id}, sender_id={sender_id}, direction={direction}, conversation_id={doc.get('conversation_id')}, account_id={account_id}, _id={doc['_id']}")
         except Exception:
             pass
         return self._serialize(doc)
@@ -133,18 +148,11 @@ class MessageModel:
         doc = self.collection.find_one(q, sort=[('created_at', -1)])
         return self._serialize(doc) if doc else None
 
-    def get_messages(self, platform, oa_id, sender_id, limit=50, skip=0, conversation_id=None):
+    def get_messages(self, platform, oa_id, sender_id, limit=50, skip=0, conversation_id=None, account_id=None):
         """
         Get messages. If conversation_id is provided, use it; otherwise use legacy sender_id.
-
-        Pagination behavior (new):
-        - Query is performed with created_at DESC so the newest messages are returned first.
-        - We apply skip and limit on that newest-first ordering to allow "skip" to move the window
-          further back in time (i.e., to older messages) for lazy-loading.
-        - Before returning, we reverse each page so the consumer receives messages in chronological
-          order (oldest -> newest) for that page, which makes it trivial to append/prepend in the UI.
         """
-        # Normalize pagination params
+
         try:
             limit = max(int(limit), 0)
         except Exception:
@@ -159,19 +167,27 @@ class MessageModel:
                 # Handle both string and ObjectId formats
                 if isinstance(conversation_id, ObjectId):
                     q = {'conversation_id': conversation_id}
+                    logger.info(f"Querying messages by conversation_id (ObjectId): {conversation_id}, account_id={account_id}")
                 else:
-                    q = {'conversation_id': ObjectId(conversation_id)}
-            except Exception:
+                    conv_id_obj = ObjectId(conversation_id)
+                    q = {'conversation_id': conv_id_obj}
+                    logger.info(f"Querying messages by conversation_id (converted): {conversation_id} -> {conv_id_obj}, account_id={account_id}")
+            except Exception as e:
+                logger.error(f"Failed to convert conversation_id '{conversation_id}' to ObjectId: {e}. Falling back to legacy query.")
                 # Fallback: try as string
                 q = {'conversation_id': conversation_id}
         else:
+            logger.info(f"Querying messages by legacy: platform={platform}, oa_id={oa_id}, sender_id={sender_id}, account_id={account_id}")
             q = {'platform': platform, 'oa_id': oa_id, 'sender_id': sender_id}
 
-        # Query newest-first so skip moves the window to older messages
+        if account_id:
+            q['accountId'] = account_id
+
         cursor = self.collection.find(q).sort('created_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]
+        
+        logger.info(f"Found {len(docs)} messages for query: {q}")
 
-        # Reverse so client gets chronological order (oldest -> newest) within this page
         docs.reverse()
         return docs
 

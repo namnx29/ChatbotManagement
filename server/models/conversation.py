@@ -13,14 +13,69 @@ class ConversationModel:
         self._create_indexes()
 
     def _create_indexes(self):
-        # Unique index on oa_id + customer_id pair
-        self.collection.create_index([('oa_id', 1), ('customer_id', 1)], unique=True)
-        # Index for querying by oa_id
-        self.collection.create_index([('oa_id', 1), ('updated_at', -1)])
-        # Index for querying by customer_id
-        self.collection.create_index([('customer_id', 1), ('updated_at', -1)])
+        # SECURITY FIX: Drop old non-isolated indexes before creating new ones
+        try:
+            # Drop old unsafe unique index to avoid conflict with new isolated index
+            index_info = self.collection.index_information()
+            
+            # Look for and drop old unique index on (oa_id, customer_id)
+            for index_name, index_details in index_info.items():
+                index_key = index_details.get('key', [])
+                if (len(index_key) == 2 and 
+                    index_key[0][0] == 'oa_id' and 
+                    index_key[1][0] == 'customer_id' and
+                    index_details.get('unique')):
+                    logger.info(f"Dropping old unsafe unique index: {index_name}")
+                    self.collection.drop_index(index_name)
+            
+            # Look for and drop old index with different sparse setting
+            for index_name, index_details in index_info.items():
+                index_key = index_details.get('key', [])
+                if (len(index_key) == 3 and 
+                    index_key[0][0] == 'accountId' and 
+                    index_key[1][0] == 'oa_id' and 
+                    index_key[2][0] == 'customer_id' and
+                    not index_details.get('sparse')):  # Old one doesn't have sparse
+                    logger.info(f"Dropping old index without sparse setting: {index_name}")
+                    self.collection.drop_index(index_name)
+        except Exception as e:
+            logger.warning(f"Error managing old indexes: {e}")
+        
+        # SECURITY FIX: Unique index on accountId + oa_id + customer_id pair (account isolation)
+        try:
+            self.collection.create_index([('accountId', 1), ('oa_id', 1), ('customer_id', 1)], unique=True, sparse=True)
+        except Exception as e:
+            logger.warning(f"Error creating accountId unique index: {e}")
+        
+        # Legacy index for backward compatibility (may be duplicate, but allows transition)
+        try:
+            self.collection.create_index([('oa_id', 1), ('customer_id', 1)], unique=False)
+        except Exception as e:
+            logger.warning(f"Error creating legacy index: {e}")
+        
+        # Index for querying by accountId and oa_id
+        try:
+            self.collection.create_index([('accountId', 1), ('oa_id', 1), ('updated_at', -1)])
+        except Exception as e:
+            logger.warning(f"Error creating accountId+oa_id index: {e}")
+        
+        # Index for querying by accountId and customer_id
+        try:
+            self.collection.create_index([('accountId', 1), ('customer_id', 1), ('updated_at', -1)])
+        except Exception as e:
+            logger.warning(f"Error creating accountId+customer_id index: {e}")
+        
         # Index for querying by chatbot_id (for account isolation)
-        self.collection.create_index([('chatbot_id', 1), ('updated_at', -1)])
+        try:
+            self.collection.create_index([('chatbot_id', 1), ('updated_at', -1)])
+        except Exception as e:
+            logger.warning(f"Error creating chatbot_id index: {e}")
+        
+        # Index for querying by accountId and chatbot_id
+        try:
+            self.collection.create_index([('accountId', 1), ('chatbot_id', 1), ('updated_at', -1)])
+        except Exception as e:
+            logger.warning(f"Error creating accountId+chatbot_id index: {e}")
 
     def _serialize(self, doc, current_user_id=None):
         if not doc:
@@ -54,7 +109,7 @@ class ConversationModel:
         return out
 
     def upsert_conversation(self, oa_id, customer_id, last_message_text=None, last_message_created_at=None, 
-                           direction='in', customer_info=None, increment_unread=False, chatbot_id=None, chatbot_info=None):
+                           direction='in', customer_info=None, increment_unread=False, chatbot_id=None, chatbot_info=None, account_id=None):
         """
         Upsert a conversation. Updates last_message and unread_count.
         - direction: 'in' for incoming (from customer), 'out' for outgoing (from staff)
@@ -62,6 +117,7 @@ class ConversationModel:
         - customer_info: dict with {name, avatar} to denormalize customer info
         - chatbot_id: the chatbot this conversation belongs to (for account isolation)
         - chatbot_info: dict with {name, avatar} to denormalize chatbot info
+        - account_id: SECURITY FIX - the account that owns this conversation (for account isolation)
         Returns the conversation document.
         """
         now = datetime.utcnow()
@@ -72,6 +128,10 @@ class ConversationModel:
             'customer_id': customer_id,
             'updated_at': now,
         }
+        
+        # SECURITY FIX: Always include accountId for account isolation
+        if account_id:
+            update_doc['accountId'] = account_id
         
         if chatbot_id:
             update_doc['chatbot_id'] = chatbot_id
@@ -94,8 +154,14 @@ class ConversationModel:
                 'avatar': customer_info.get('avatar'),
             }
         
+        # Build query to find existing conversation
+        # SECURITY FIX: Include accountId in query for isolation
+        query = {'oa_id': oa_id, 'customer_id': customer_id}
+        if account_id:
+            query['accountId'] = account_id
+        
         # Check if conversation exists first to avoid $setOnInsert vs $inc conflict
-        existing = self.collection.find_one({'oa_id': oa_id, 'customer_id': customer_id})
+        existing = self.collection.find_one(query)
         
         if existing:
             # Document exists - use $set and $inc
@@ -115,9 +181,9 @@ class ConversationModel:
                 }
             }
         
-        # Upsert conversation
+        # Upsert conversation with account isolation
         result = self.collection.find_one_and_update(
-            {'oa_id': oa_id, 'customer_id': customer_id},
+            query,
             update_op,
             upsert=True,
             return_document=True
@@ -125,21 +191,46 @@ class ConversationModel:
         
         return self._serialize(result)
 
-    def find_by_oa_and_customer(self, oa_id, customer_id):
-        """Find conversation by oa_id and customer_id"""
-        doc = self.collection.find_one({'oa_id': oa_id, 'customer_id': customer_id})
+    def find_by_oa_and_customer(self, oa_id, customer_id, account_id=None):
+        """Find conversation by oa_id and customer_id
+        
+        SECURITY FIX: If account_id is provided, filter by it to ensure account isolation.
+        """
+        query = {'oa_id': oa_id, 'customer_id': customer_id}
+        if account_id:
+            query['accountId'] = account_id
+        doc = self.collection.find_one(query)
+        
+        # DEBUG LOGGING: Trace conversation retrieval
+        if doc:
+            logger.info(f"Found conversation: oa_id={oa_id}, customer_id={customer_id}, account_id={account_id}, _id={doc.get('_id')}")
+        else:
+            logger.warning(f"Conversation NOT found: oa_id={oa_id}, customer_id={customer_id}, account_id={account_id}")
+        
         return self._serialize(doc)
 
-    def find_by_oa(self, oa_id, limit=100, skip=0):
-        """Find all conversations for an OA, sorted by updated_at descending"""
-        cursor = self.collection.find({'oa_id': oa_id}).sort('updated_at', -1).skip(skip).limit(limit)
+    def find_by_oa(self, oa_id, limit=100, skip=0, account_id=None):
+        """Find all conversations for an OA, sorted by updated_at descending
+        
+        SECURITY FIX: If account_id is provided, filter by it to ensure account isolation.
+        """
+        query = {'oa_id': oa_id}
+        if account_id:
+            query['accountId'] = account_id
+        cursor = self.collection.find(query).sort('updated_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]
         return docs
 
-    def mark_read(self, oa_id, customer_id):
-        """Mark conversation as read (reset unread_count to 0)"""
+    def mark_read(self, oa_id, customer_id, account_id=None):
+        """Mark conversation as read (reset unread_count to 0)
+        
+        SECURITY FIX: If account_id is provided, filter by it to ensure account isolation.
+        """
+        query = {'oa_id': oa_id, 'customer_id': customer_id}
+        if account_id:
+            query['accountId'] = account_id
         result = self.collection.find_one_and_update(
-            {'oa_id': oa_id, 'customer_id': customer_id},
+            query,
             {
                 '$set': {
                     'unread_count': 0,
@@ -170,17 +261,30 @@ class ConversationModel:
         docs = [self._serialize(d) for d in list(cursor)]
         return docs
 
-    def find_by_chatbot_id(self, chatbot_id, limit=2000, skip=0):
-        """Find all conversations for a chatbot_id, sorted by updated_at descending"""
+    def find_by_chatbot_id(self, chatbot_id, limit=2000, skip=0, account_id=None):
+        """Find all conversations for a chatbot_id, sorted by updated_at descending
+        
+        SECURITY FIX: If account_id is provided, filter by it to ensure account isolation.
+        """
         if not chatbot_id:
             return []
-        cursor = self.collection.find({'chatbot_id': chatbot_id}).sort('updated_at', -1).skip(skip).limit(limit)
+        query = {'chatbot_id': chatbot_id}
+        if account_id:
+            query['accountId'] = account_id
+        cursor = self.collection.find(query).sort('updated_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]
         return docs
 
-    def update_nickname(self, oa_id, customer_id, user_id, nick_name):
+    def update_nickname(self, oa_id, customer_id, user_id, nick_name, account_id=None):
+        """Update nickname for a conversation
+        
+        SECURITY FIX: If account_id is provided, filter by it to ensure account isolation.
+        """
+        query = {'oa_id': oa_id, 'customer_id': customer_id}
+        if account_id:
+            query['accountId'] = account_id
         result = self.collection.find_one_and_update(
-            {'oa_id': oa_id, 'customer_id': customer_id},
+            query,
             {
                 '$set': {
                     f'nicknames.{user_id}': nick_name,

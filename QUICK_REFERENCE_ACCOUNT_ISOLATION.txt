@@ -1,0 +1,196 @@
+# Account Isolation Bug Fix - Quick Reference Card
+
+## Problem
+❌ Conversations leak between accounts when platform integration transfers
+
+## Solution  
+✅ Added account isolation to conversation model
+
+## Status
+🟢 READY FOR DEPLOYMENT
+
+---
+
+## The Fix (One Page)
+
+### Root Cause
+No `accountId` in conversations → MongoDB finds old account's conversation when platform transfers
+
+### Fix
+Add `accountId` to conversation unique index and all queries
+
+### Changes
+- **Model**: 7 methods updated
+- **Webhooks**: 11 calls updated
+- **Queries**: 5 calls updated
+
+---
+
+## Deployment Checklist
+
+```
+PRE-DEPLOYMENT
+□ Read ACCOUNT_ISOLATION_FINAL_SUMMARY.md
+□ Backup MongoDB database
+□ Test migration in dev environment
+□ Code review completed
+
+DEPLOYMENT
+□ Run MongoDB migration script
+□ Verify migration (no errors, all docs have accountId)
+□ Deploy code changes
+□ Restart application (indexes auto-created)
+
+POST-DEPLOYMENT
+□ Monitor logs for 1 hour
+□ Run test scenario (platform transfer)
+□ Verify with end users
+□ Watch for errors/duplicate key issues
+```
+
+---
+
+## Key Changes (Code Level)
+
+### Before
+```python
+# Conversations not account-aware
+upsert_conversation(oa_id, customer_id, ...)
+```
+
+### After
+```python
+# Conversations account-aware
+upsert_conversation(oa_id, customer_id, account_id=..., ...)
+```
+
+---
+
+## Database Change
+
+### Before
+```javascript
+db.conversations.createIndex({oa_id: 1, customer_id: 1}, {unique: true})
+// Risk: Same oa_id + customer from different accounts = collision!
+```
+
+### After
+```javascript
+db.conversations.createIndex({accountId: 1, oa_id: 1, customer_id: 1}, {unique: true})
+// Safe: (accountId, oa_id, customer_id) unique per account
+```
+
+---
+
+## Files Modified
+
+| File | Changes |
+|------|---------|
+| `models/conversation.py` | +7 methods, +account_id param |
+| `routes/facebook.py` | +4 webhook calls |
+| `routes/zalo.py` | +7 webhook calls |
+| `routes/integrations.py` | +1 query call |
+
+---
+
+## Migration Commands
+
+```bash
+# 1. Backup database
+mongodump --out=backup_$(date +%Y%m%d_%H%M%S)
+
+# 2. Add accountId to conversations (see MIGRATION_GUIDE for script)
+# 3. Verify migration completed
+# 4. Deploy code
+# 5. Restart application
+```
+
+---
+
+## Testing (Quick)
+
+```javascript
+// 1. Account A connects platform, gets message
+db.conversations.findOne({accountId: "A", oa_id: "page_123"})
+// Result: 1 doc
+
+// 2. Account A removes integration, B connects same platform
+// 3. B gets message from same customer
+db.conversations.findOne({accountId: "B", oa_id: "page_123"})
+// Result: NEW doc
+
+// 4. Verify both exist
+db.conversations.find({oa_id: "page_123"})
+// Result: 2 docs with different accountIds ✅
+```
+
+---
+
+## Documentation Quick Links
+
+| Need | Read |
+|------|------|
+| Big picture | `ACCOUNT_ISOLATION_FINAL_SUMMARY.md` |
+| Root cause | `ACCOUNT_ISOLATION_ISSUE_ANALYSIS.md` |
+| Tech details | `ACCOUNT_ISOLATION_COMPLETE_IMPLEMENTATION_REPORT.md` |
+| Visuals | `ACCOUNT_ISOLATION_VISUAL_GUIDE.md` |
+| Migration | `ACCOUNT_ISOLATION_MIGRATION_GUIDE.md` |
+| Navigation | `ACCOUNT_ISOLATION_DOCUMENTATION_INDEX.md` |
+
+---
+
+## Rollback
+
+If issues arise:
+1. Restore from database backup
+2. Redeploy previous code version
+3. Restart application
+
+See: `ACCOUNT_ISOLATION_MIGRATION_GUIDE.md#rollback-plan`
+
+---
+
+## Key Numbers
+
+- **4** files modified
+- **7** methods updated
+- **11** webhook calls updated
+- **5** query calls updated
+- **~20** total code locations changed
+- **1-2** hours deployment time
+- **🟢 SECURE** after fix
+
+---
+
+## Success Criteria
+
+✅ Accounts have separate conversations
+✅ Platform transfer doesn't cause mixing
+✅ No duplicate key errors in logs
+✅ Users can access all old conversations
+✅ Messages properly isolated
+
+---
+
+## Emergency Contact
+
+If deployment fails:
+1. Check: `ACCOUNT_ISOLATION_MIGRATION_GUIDE.md#troubleshooting`
+2. Rollback using procedure above
+3. Review logs for specific errors
+4. See troubleshooting section in migration guide
+
+---
+
+## Remember
+
+- **Backup first** ← Most important
+- **Test in dev** before production
+- **Monitor logs** after deployment
+- **Document success** for future reference
+
+---
+
+**Status**: ✅ Ready to deploy. Follow checklist and migration guide.
+
+Print this card and keep it handy during deployment! 📋

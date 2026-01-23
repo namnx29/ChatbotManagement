@@ -1,8 +1,8 @@
 "use client";
 
-import { Modal, Form, Input, Button, message } from "antd";
+import { Modal, Form, Input, Button, App } from "antd";
 import { changeName } from "@/lib/api";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export default function NameChangeModal({
   visible,
@@ -11,7 +11,19 @@ export default function NameChangeModal({
 }) {
   const [nameForm] = Form.useForm();
   const [nameLoading, setNameLoading] = useState(false);
-  const [newName, setNewName] = useState("");
+  const { message } = App.useApp();
+
+  // Reset form when modal opens or closes
+  useEffect(() => {
+    if (visible) {
+      // If you want the input to start empty:
+      nameForm.resetFields(); 
+      
+      // OPTIONAL: If you want the input to start with the current name from localStorage:
+      // const currentName = localStorage.getItem('userName');
+      // nameForm.setFieldsValue({ newName: currentName });
+    }
+  }, [visible, nameForm]);
 
   const handleNameSubmit = async (values) => {
     setNameLoading(true);
@@ -19,11 +31,10 @@ export default function NameChangeModal({
       const result = await changeName(accountId, {
         newName: values.newName,
       });
+
       if (result.success) {
-        // Update localStorage with new name
         localStorage.setItem('userName', values.newName);
         
-        // Dispatch event to notify sidebar and other components
         window.dispatchEvent(
           new CustomEvent('nameUpdated', {
             detail: { userName: values.newName },
@@ -31,9 +42,7 @@ export default function NameChangeModal({
         );
         
         message.success("Đổi tên hồ sơ thành công!");
-        nameForm.resetFields();
-        setNewName("");
-        onClose();
+        onClose()
       } else {
         message.error(result.message || "Đổi tên hồ sơ thất bại!");
       }
@@ -52,6 +61,7 @@ export default function NameChangeModal({
       onCancel={onClose}
       footer={null}
       centered
+      destroyOnHidden
     >
       <Form
         form={nameForm}
@@ -60,11 +70,7 @@ export default function NameChangeModal({
         requiredMark={false}
       >
         <Form.Item
-          label={
-            <span style={{ fontSize: "14px" }}>
-              Tên hồ sơ
-            </span>
-          }
+          label={<span style={{ fontSize: "14px" }}>Tên hồ sơ</span>}
           name="newName"
           rules={[
             { required: true, message: "Vui lòng nhập tên hồ sơ!" },

@@ -30,7 +30,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { getAvatarUrl } from "@/lib/api";
+import { getAvatarUrl, fetchProfile } from "@/lib/api";
 import TrialBanner from "@/lib/components/popup/TrialBanner";
 import { NotificationProvider, useNotification } from "@/lib/context/NotificationContext";
 
@@ -53,11 +53,10 @@ function DashboardLayoutContent({ children }) {
 
   useEffect(() => {
     // Check if user is authenticated
-    const checkAuth = () => {
+    const checkAuth = async () => {
       const userEmail = localStorage.getItem("userEmail");
       const accountId = localStorage.getItem("accountId");
       const storedUserName = localStorage.getItem("userName");
-      const storedAvatar = localStorage.getItem("userAvatar");
 
       if (!userEmail || !accountId) {
         // User not authenticated, redirect to login
@@ -65,8 +64,17 @@ function DashboardLayoutContent({ children }) {
         return;
       }
 
+      try {
+        const result = await fetchProfile(accountId);
+        if (result.success && result.data) {
+          setUserAvatar(result.data.avatar_url || null);
+        }
+      } catch (error) {
+        console.error("Failed to fetch profile:", error);
+        message.error("Failed to load profile data");
+      }
+
       setUserName(storedUserName || userEmail.split("@")[0]);
-      setUserAvatar(storedAvatar || null);
       setIsAuthenticated(true);
       setIsLoading(false);
     };
@@ -239,7 +247,7 @@ function DashboardLayoutContent({ children }) {
 
     // Settings - has nested children
     if (pathname.startsWith("/dashboard/settings")) {
-      return "/dashboard/settings/account"; // pick any child
+      return "/dashboard/settings/account";
     }
 
     return pathname;
@@ -451,10 +459,10 @@ function DashboardLayoutContent({ children }) {
                 </Badge>
 
                 {!collapsed && (
-                  <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
                     <Text
                       style={{ maxWidth: 150, color: "white", marginBottom: 4 }}
-                      ellipsis={{ tooltip: {userName} }} 
+                      ellipsis={{ tooltip: { userName } }}
                     >
                       {userName}
                     </Text>

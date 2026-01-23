@@ -7,9 +7,7 @@ import {
   Col,
   Tag,
   Select,
-  Form,
-  Input,
-  message,
+  App,
   Spin,
 } from "antd";
 import { EditOutlined, DownOutlined } from "@ant-design/icons";
@@ -56,6 +54,7 @@ const DetailRow = ({ label, value, actionComponent, isFullWidth = false }) => (
 );
 
 export default function ProfilePage() {
+  const { message } = App.useApp();
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -190,8 +189,6 @@ export default function ProfilePage() {
   // Handle password change modal
   const handlePasswordModalOpen = () => {
     setPasswordModalVisible(true);
-    passwordForm.resetFields();
-    setNewPassword("");
   };
 
   const handlePasswordModalClose = () => {
@@ -200,8 +197,6 @@ export default function ProfilePage() {
 
   const handleNameModalOpen = () => {
     setNameModalVisible(true);
-    nameForm.resetFields();
-    setNewName("");
   };
 
   const handleNameModalClose = () => {
@@ -291,12 +286,6 @@ export default function ProfilePage() {
                 onClick={handleSaveChanges}
                 loading={isSaving}
                 disabled={!selectedAvatarFile || isSaving}
-                style={{
-                  background: "#9b59d0",
-                  borderColor: "#9b59d0",
-                  borderRadius: "6px",
-                  color: "white",
-                }}
               >
                 {isSaving ? "Đang lưu..." : "Lưu thay đổi"}
               </Button>

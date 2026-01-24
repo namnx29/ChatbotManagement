@@ -1,6 +1,6 @@
 'use client';
 
-import { Avatar, Input, Button, Switch, Image, Alert } from 'antd';
+import { Select, Space, Avatar, Input, Button, Switch, Image, Alert } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
@@ -8,14 +8,17 @@ import {
 	RobotOutlined,
 	EditOutlined,
 	TagFilled,
-	ArrowDownOutlined
+	ArrowDownOutlined,
+	DownOutlined
 } from '@ant-design/icons';
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import CustomerNameChangeModal from '@/lib/components/popup/CustomerNameChangeModal';
+import { getAvatarUrl } from '@/lib/api';
 
 dayjs.locale('vi');
+const { TextArea } = Input;
 
 const platformIcons = {
 	facebook: (
@@ -85,6 +88,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const [hasNewMessages, setHasNewMessages] = useState(false);
 	const [isAtBottom, setIsAtBottom] = useState(true);
 	const [nameModalVisible, setNameModalVisible] = useState(false);
+	const [showSidebar, setShowSidebar] = useState(false);
 
 	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
 	const isDisconnected = platformStatus.is_connected === false;
@@ -134,7 +138,6 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const handleScroll = async (e) => {
 		const el = e.currentTarget;
 
-		// Check if user is at bottom (with small threshold for precision)
 		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
 		setShowScrollButton(!atBottom);
 		setIsAtBottom(atBottom);
@@ -142,7 +145,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 		if (onScrollPositionChange) {
 			onScrollPositionChange(atBottom);
 		}
-		// Load more messages when scrolling to top
+
 		if (el.scrollTop <= 5 && !conversation.loadingMore && conversation.hasMore) {
 			isPrependingRef.current = true;
 			prevScrollHeightRef.current = el.scrollHeight;
@@ -232,7 +235,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-			{/* Header */}
+			{/* Header - Full Width */}
 			<div
 				style={{
 					padding: '16px 20px',
@@ -257,7 +260,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 						<div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
 							{conversation.chatbot_info ? (
 								<>
-									<Avatar size={16} src={conversation.chatbot_info.avatar} />
+									<Avatar size={16} src={getAvatarUrl(conversation.chatbot_info.avatar)} />
 									<span style={{ fontSize: '13px', color: '#666' }}>
 										{conversation.chatbot_info.name}
 									</span>
@@ -302,241 +305,476 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 						/>
 					</div>
 					<InfoCircleOutlined
-						style={{ fontSize: '18px', color: '#666', cursor: 'pointer' }}
+						style={{ fontSize: '18px', color: showSidebar ? '#6c3fb5' : '#666', cursor: 'pointer' }}
+						onClick={() => setShowSidebar(!showSidebar)}
 					/>
 				</div>
 			</div>
 
-			{/* Messages Area */}
-			<div
-				ref={messagesContainerRef}
-				onScroll={handleScroll}
-				style={{
+			{/* Content Area - Split when sidebar is open */}
+			<div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+				{/* Messages Section */}
+				<div style={{
+					display: 'flex',
+					flexDirection: 'column',
 					flex: 1,
-					overflowY: 'auto',
-					padding: '20px',
-					background: '#f8f9fa',
-					overflowAnchor: 'none',
-					position: 'relative',
-				}}
-			>
-				{conversation.loadingMore && (
-					<div style={{ textAlign: 'center', marginBottom: '8px', color: '#666' }}>Đang tải...</div>
-				)}
+					transition: 'all 0.3s ease',
+					minWidth: 0
+				}}>
+					{/* Messages Area */}
+					<div
+						ref={messagesContainerRef}
+						onScroll={handleScroll}
+						style={{
+							flex: 1,
+							overflowY: 'auto',
+							padding: '20px',
+							background: '#f8f9fa',
+							overflowAnchor: 'none',
+							position: 'relative',
+						}}
+					>
+						{conversation.loadingMore && (
+							<div style={{ textAlign: 'center', marginBottom: '8px', color: '#666' }}>Đang tải...</div>
+						)}
 
-				{messages.map((msg, index) => {
-					const prevMsg = messages[index - 1];
-					const currentDate = getRawDate(msg);
-					const prevDate = getRawDate(prevMsg);
+						{messages.map((msg, index) => {
+							const prevMsg = messages[index - 1];
+							const currentDate = getRawDate(msg);
+							const prevDate = getRawDate(prevMsg);
 
-					const isNewDay = !msg.pending && !prevMsg?.pending &&
-						(!prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day'));
+							const isNewDay = !msg.pending && !prevMsg?.pending &&
+								(!prevMsg || !dayjs(currentDate).isSame(dayjs(prevDate), 'day'));
 
-					const messageKey = msg._id || msg.id || `temp-${index}`;
+							const messageKey = msg._id || msg.id || `temp-${index}`;
 
-					return (
-						<div key={`container-${messageKey}`}>
-							{isNewDay && (
-								<div style={{
-									textAlign: 'center',
-									margin: '24px 0 16px',
-									display: 'flex',
-									alignItems: 'center',
-									justifyContent: 'center',
-									gap: '10px'
-								}}>
-									<span style={{
-										background: '#e1e4e8',
-										color: '#65676b',
-										padding: '2px 12px',
-										borderRadius: '12px',
-										fontSize: '12px',
-										fontWeight: '500',
-									}}>
-										{getDateLabel(currentDate)}
-									</span>
-								</div>
-							)}
-
-							<div
-								style={{
-									display: 'flex',
-									justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-									marginBottom: '16px',
-									alignItems: 'flex-end',
-									gap: '8px',
-									opacity: msg.pending ? 0.6 : 1,
-								}}
-							>
-								{msg.sender === 'customer' && (
-									<Avatar size={32} src={msg.avatar || conversation.avatar}>
-										{(msg.name || conversation.name || 'U')[0]}
-									</Avatar>
-								)}
-								<div
-									style={{
-										maxWidth: '60%',
-										display: 'flex',
-										flexDirection: 'column',
-										alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-									}}
-								>
-									{msg.image ? (
+							return (
+								<div key={`container-${messageKey}`}>
+									{isNewDay && (
 										<div style={{
-											maxWidth: '300px',
-											height: '200px',
-											overflow: 'hidden',
-											borderRadius: '12px',
-											marginBottom: '4px',
-											border: '1px solid #f0f0f0',
-											position: 'relative',
+											textAlign: 'center',
+											margin: '24px 0 16px',
+											display: 'flex',
+											alignItems: 'center',
+											justifyContent: 'center',
+											gap: '10px'
 										}}>
-											<Image
-												src={msg.image}
-												alt="Sent"
-												style={{
-													width: '100%',
-													height: '100%',
-													objectFit: 'cover',
-													cursor: 'pointer',
-													display: 'block'
-												}}
-												styles={{
-													root: {
-														width: '100%',
-														height: '100%'
-													}
-												}}
-												preview={{
-													cover: <div style={{ fontSize: '12px' }}>Click to view</div>
-												}}
-											/>
-										</div>
-									) : (
-										<div
-											style={{
-												background: msg.sender === 'user' ? '#6c3fb5' : 'white',
-												color: msg.sender === 'user' ? 'white' : '#333',
-												padding: '10px 16px',
+											<span style={{
+												background: '#e1e4e8',
+												color: '#65676b',
+												padding: '2px 12px',
 												borderRadius: '12px',
-												fontSize: '14px',
-												boxShadow:
-													msg.sender === 'user'
-														? '0 2px 4px rgba(108, 63, 181, 0.2)'
-														: '0 1px 2px rgba(0,0,0,0.05)',
-											}}
-										>
-											{normalizeMessageText(msg)}
+												fontSize: '12px',
+												fontWeight: '500',
+											}}>
+												{getDateLabel(currentDate)}
+											</span>
 										</div>
 									)}
-									<span
+
+									<div
 										style={{
-											fontSize: '11px',
-											color: '#999',
-											marginTop: '4px',
+											display: 'flex',
+											justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+											marginBottom: '16px',
+											alignItems: 'flex-end',
+											gap: '8px',
+											opacity: msg.pending ? 0.6 : 1,
 										}}
 									>
-										{msg.time}
-									</span>
+										{msg.sender === 'customer' && (
+											<Avatar size={32} src={msg.avatar || conversation.avatar}>
+												{(msg.name || conversation.name || 'U')[0]}
+											</Avatar>
+										)}
+										<div
+											style={{
+												maxWidth: '60%',
+												display: 'flex',
+												flexDirection: 'column',
+												alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+											}}
+										>
+											{msg.image ? (
+												<div style={{
+													maxWidth: '300px',
+													height: '200px',
+													overflow: 'hidden',
+													borderRadius: '12px',
+													marginBottom: '4px',
+													border: '1px solid #f0f0f0',
+													position: 'relative',
+												}}>
+													<Image
+														src={msg.image}
+														alt="Sent"
+														style={{
+															width: '100%',
+															height: '100%',
+															objectFit: 'cover',
+															cursor: 'pointer',
+															display: 'block'
+														}}
+														styles={{
+															root: {
+																width: '100%',
+																height: '100%'
+															}
+														}}
+														preview={{
+															cover: <div style={{ fontSize: '12px' }}>Click to view</div>
+														}}
+													/>
+												</div>
+											) : (
+												<div
+													style={{
+														background: msg.sender === 'user' ? '#6c3fb5' : 'white',
+														color: msg.sender === 'user' ? 'white' : '#333',
+														padding: '10px 16px',
+														borderRadius: '12px',
+														fontSize: '14px',
+														boxShadow:
+															msg.sender === 'user'
+																? '0 2px 4px rgba(108, 63, 181, 0.2)'
+																: '0 1px 2px rgba(0,0,0,0.05)',
+													}}
+												>
+													{normalizeMessageText(msg)}
+												</div>
+											)}
+											<span
+												style={{
+													fontSize: '11px',
+													color: '#999',
+													marginTop: '4px',
+												}}
+											>
+												{msg.time}
+											</span>
+										</div>
+									</div>
+								</div>
+							);
+						})}
+						{showScrollButton && (
+							<Button
+								icon={<ArrowDownOutlined />}
+								onClick={scrollToBottom}
+								style={{
+									position: 'sticky',
+									bottom: '10px',
+									left: '50%',
+									transform: 'translateX(-50%)',
+									zIndex: 100,
+									borderRadius: '20px',
+									background: '#6c3fb5',
+									color: 'white',
+									border: hasNewMessages ? '2px solid #52c41a' : 'none',
+									boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+									display: 'flex',
+									alignItems: 'center',
+									gap: '8px',
+									padding: '0 16px',
+									height: '32px'
+								}}
+							>
+							</Button>
+						)}
+						<div ref={messagesEndRef} />
+					</div>
+
+					{/* Input Footer */}
+					<div
+						style={{
+							padding: '16px 20px',
+							borderTop: '1px solid #f0f0f0',
+							background: 'white',
+							display: 'flex',
+							flexDirection: 'column',
+							gap: '12px',
+						}}
+					>
+						{isDisconnected && (
+							<Alert
+								type="warning"
+								showIcon
+								title="Nền tảng không được kết nối hoặc đã bị ngắt kết nối. Hãy kết nối lại nền tảng này trong phần tích hợp để tiếp tục nhắn tin."
+								style={{ marginBottom: '4px' }}
+							/>
+						)}
+						<div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+							<input
+								type="file"
+								ref={fileInputRef}
+								style={{ display: 'none' }}
+								accept="image/*"
+								onChange={handleImageUpload}
+							/>
+							<Button
+								icon={<PictureOutlined />}
+								size="large"
+								onClick={() => fileInputRef.current?.click()}
+								style={{ flexShrink: 0 }}
+								disabled={isDisconnected}
+							/>
+							<Input
+								placeholder={isDisconnected ? "Nền tảng không được kết nối..." : "Nhập tin nhắn..."}
+								value={message}
+								onChange={(e) => setMessage(e.target.value)}
+								onPressEnter={!isDisconnected ? handleSend : null}
+								disabled={isDisconnected}
+								size="large"
+								style={{
+									flex: 1,
+									opacity: isDisconnected ? 0.6 : 1,
+									cursor: isDisconnected ? 'not-allowed' : 'text'
+								}}
+							/>
+							<Button
+								type="primary"
+								icon={<SendOutlined />}
+								size="large"
+								onClick={handleSend}
+								disabled={isDisconnected}
+								style={{
+									background: '#6c3fb5',
+									borderColor: '#6c3fb5',
+									flexShrink: 0,
+								}}
+							/>
+						</div>
+					</div>
+				</div>
+
+				{/* Right Sidebar - Slides in from right */}
+				{showSidebar && (
+					<div style={{
+						width: '320px',
+						background: 'white',
+						borderLeft: '1px solid #f0f0f0',
+						overflowY: 'auto',
+						flexShrink: 0,
+						animation: 'slideIn 0.3s ease',
+						display: 'flex',
+						flexDirection: 'column',
+						height: '100%',
+					}}>
+						<div style={{ flex: 1, overflowY: 'auto' }}>
+							{/* Sidebar Header */}
+							<div style={{
+								padding: '20px',
+								borderBottom: '1px solid #f0f0f0',
+								display: 'flex',
+								alignItems: 'center',
+								position: 'relative'
+							}}>
+								<div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+									<Avatar size={40} src={conversation.avatar}>
+										{conversation.name[0]}
+									</Avatar>
+									<div>
+										<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+											<span style={{ fontWeight: '600', fontSize: '16px' }}>
+												{conversation.name}
+											</span>
+											<Button type="text" size="small" onClick={handleNameModalOpen} icon={<EditOutlined />} />
+										</div>
+										<div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+											{conversation.chatbot_info ? (
+												<>
+													<Avatar size={16} src={getAvatarUrl(conversation.chatbot_info.avatar)} />
+													<span style={{ fontSize: '13px', color: '#666' }}>
+														{conversation.chatbot_info.name}
+													</span>
+												</>
+											) : (
+												<>
+													{platformIcons[conversation.platform]}
+													<span style={{ fontSize: '13px', color: '#666' }}>
+														{conversation.platform === 'facebook' ? 'Facebook' :
+															conversation.platform === 'instagram' ? 'Instagram' : 'Zalo'}
+													</span>
+												</>
+											)}
+											{conversation.tag && (
+												<TagFilled style={{ color: tagColors['completed'] }} />
+											)}
+											{conversation.secondaryTag && (
+												<div
+													style={{
+														background: '#f0f0f0',
+														padding: '2px 6px',
+														borderRadius: '4px',
+														fontSize: '11px',
+														color: '#666',
+													}}
+												>
+													{conversation.secondaryTag}
+												</div>
+											)}
+										</div>
+									</div>
+								</div>
+							</div>
+
+							<div style={{ padding: '16px' }}>
+								{/* Tags Section */}
+								<div style={{ marginBottom: '18px' }}>
+									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
+										Tag
+									</div>
+									<Select
+										defaultValue="interacting"
+										style={{ width: '100%' }}
+										options={[
+											{
+												value: 'completed',
+												label: (
+													<Space>
+														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#52c41a' }} />
+														Chốt đơn
+													</Space>
+												),
+											},
+											{
+												value: 'bot-failed',
+												label: (
+													<Space>
+														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#ff4d4f' }} />
+														Bot không trả lời được
+													</Space>
+												),
+											},
+											{
+												value: 'no-response',
+												label: (
+													<Space>
+														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#8c8c8c' }} />
+														Khách không phản hồi
+													</Space>
+												),
+											},
+											{
+												value: 'interacting',
+												label: (
+													<Space>
+														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fa8c16' }} />
+														Đang tương tác
+													</Space>
+												),
+											},
+										]}
+									/>
+								</div>
+
+								{/* Status Section (Tư vấn) */}
+								<div>
+									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
+										Trạng thái
+									</div>
+									<Select
+										defaultValue="tu-van"
+										style={{ width: '100%', marginBottom: '16px' }}
+										optionLabelProp="label" // This tells AntD to only show the 'label' prop in the selection box
+										suffixIcon={<DownOutlined style={{ fontSize: '10px', color: '#bfbfbf' }} />}
+									>
+										<Select.Option value="tu-van" label="Tư vấn">
+											<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+												<span>Tư vấn</span>
+												<div style={{ width: 24, height: 6, borderRadius: 3, background: '#bae7ff' }} />
+											</div>
+										</Select.Option>
+
+										<Select.Option value="tiem-nang" label="Tiềm năng">
+											<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+												<span>Tiềm năng</span>
+												<div style={{ width: 24, height: 6, borderRadius: 3, background: '#ffe58f' }} />
+											</div>
+										</Select.Option>
+
+										<Select.Option value="chot-don" label="Chốt đơn">
+											<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+												<span>Chốt đơn</span>
+												<div style={{ width: 24, height: 6, borderRadius: 3, background: '#b7eb8f' }} />
+											</div>
+										</Select.Option>
+									</Select>
+								</div>
+
+								<div style={{ marginBottom: '14px' }}>
+									<div style={{
+										fontWeight: '600',
+										fontSize: '14px',
+										marginBottom: '8px',
+										color: '#333'
+									}}>
+										Ghi chú
+									</div>
+									<TextArea
+										placeholder="Nhập ghi chú tại đây..."
+										autoSize={{ minRows: 6, maxRows: 6 }}
+										style={{
+											borderRadius: '6px',
+											fontSize: '13px',
+											border: '1px solid #d9d9d9'
+										}}
+									/>
 								</div>
 							</div>
 						</div>
-					);
-				})}
-				{showScrollButton && (
-					<Button
-						icon={<ArrowDownOutlined />}
-						onClick={scrollToBottom}
-						style={{
-							position: 'sticky',
-							bottom: '10px',
-							left: '50%',
-							transform: 'translateX(-50%)',
-							zIndex: 100,
-							borderRadius: '20px',
-							background: '#6c3fb5',
-							color: 'white',
-							border: hasNewMessages ? '2px solid #52c41a' : 'none',
-							boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+
+						{/* Action Buttons */}
+						<div style={{
+							padding: '16px',
 							display: 'flex',
-							alignItems: 'center',
-							gap: '8px',
-							padding: '0 16px',
-							height: '32px'
-						}}
-					>
-					</Button>
+							gap: '12px',
+							background: 'white'
+						}}>
+							<Button
+								onClick={() => setShowSidebar(false)}
+								style={{
+									flex: 1,
+									borderRadius: '8px',
+									height: '40px'
+								}}
+							>
+								Đóng
+							</Button>
+							<Button
+								type="primary"
+								style={{
+									flex: 1,
+									background: '#6c3fb5',
+									borderColor: '#6c3fb5',
+									borderRadius: '8px',
+									height: '40px'
+								}}
+							>
+								Lưu
+							</Button>
+						</div>
+					</div>
 				)}
-				<div ref={messagesEndRef} />
 			</div>
 
-			{/* Input Footer */}
-			<div
-				style={{
-					padding: '16px 20px',
-					borderTop: '1px solid #f0f0f0',
-					background: 'white',
-					display: 'flex',
-					flexDirection: 'column',
-					gap: '12px',
-				}}
-			>
-				{isDisconnected && (
-					<Alert
-						type="warning"
-						showIcon
-						title="Nền tảng không được kết nối hoặc đã bị ngắt kết nối. Hãy kết nối lại nền tảng này trong phần tích hợp để tiếp tục nhắn tin."
-						style={{ marginBottom: '4px' }}
-					/>
-				)}
-				<div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-					<input
-						type="file"
-						ref={fileInputRef}
-						style={{ display: 'none' }}
-						accept="image/*"
-						onChange={handleImageUpload}
-					/>
-					<Button
-						icon={<PictureOutlined />}
-						size="large"
-						onClick={() => fileInputRef.current?.click()}
-						style={{ flexShrink: 0 }}
-						disabled={isDisconnected}
-					/>
-					<Input
-						placeholder={isDisconnected ? "Nền tảng không được kết nối..." : "Nhập tin nhắn..."}
-						value={message}
-						onChange={(e) => setMessage(e.target.value)}
-						onPressEnter={!isDisconnected ? handleSend : null}
-						disabled={isDisconnected}
-						size="large"
-						style={{
-							flex: 1,
-							opacity: isDisconnected ? 0.6 : 1,
-							cursor: isDisconnected ? 'not-allowed' : 'text'
-						}}
-					/>
-					<Button
-						type="primary"
-						icon={<SendOutlined />}
-						size="large"
-						onClick={handleSend}
-						disabled={isDisconnected}
-						style={{
-							background: '#6c3fb5',
-							borderColor: '#6c3fb5',
-							flexShrink: 0,
-						}}
-					/>
-				</div>
-			</div>
 			<CustomerNameChangeModal
 				visible={nameModalVisible}
 				onClose={handleNameModalClose}
 				conversation={conversation}
 				onSuccess={handleNicknameSuccess}
 			/>
-		</div>
+
+			<style jsx>{`
+				@keyframes slideIn {
+					from {
+						transform: translateX(100%);
+					}
+					to {
+						transform: translateX(0);
+					}
+				}
+			`}</style>
+		</div >
 	);
 }

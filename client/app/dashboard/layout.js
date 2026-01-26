@@ -26,6 +26,7 @@ import {
   RightOutlined,
   LeftOutlined,
   LogoutOutlined,
+  ShareAltOutlined
 } from "@ant-design/icons";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -35,7 +36,7 @@ import TrialBanner from "@/lib/components/popup/TrialBanner";
 import { NotificationProvider, useNotification } from "@/lib/context/NotificationContext";
 
 const { Header, Sider, Content } = Layout;
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const MOBILE_BREAKPOINT = 768;
 
@@ -184,6 +185,11 @@ function DashboardLayoutContent({ children }) {
       ),
     },
     {
+      key: "/dashboard/accounts",
+      icon: <TeamOutlined />,
+      label: "Quản lý tài khoản",
+    },
+    {
       key: "/dashboard/statistics",
       icon: <LineChartOutlined />,
       label: "Thống kê",
@@ -194,16 +200,11 @@ function DashboardLayoutContent({ children }) {
       icon: <HistoryOutlined />,
       label: "Lịch sử giao dịch",
     },
-    { key: "/dashboard/affiliate", icon: <TeamOutlined />, label: "Affiliate" },
+    { key: "/dashboard/affiliate", icon: <ShareAltOutlined />, label: "Affiliate" },
     {
       key: "/dashboard/support",
       icon: <QuestionCircleOutlined />,
       label: "Hỗ trợ yêu cầu ticket",
-    },
-    {
-      key: "/dashboard/usage",
-      icon: <SettingOutlined />,
-      label: "Hạn mức sử dụng",
     },
     {
       key: "/dashboard/upgrade",

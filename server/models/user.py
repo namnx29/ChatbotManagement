@@ -313,6 +313,7 @@ class UserModel:
             'phone_number': user.get('phone_number'),
             'avatar_url': user.get('avatar_url'),
             'is_verified': user.get('is_verified', False),
+            'created_at': user.get('created_at'),
         }
     
     def update_avatar_url(self, account_id, avatar_url):

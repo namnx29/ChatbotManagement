@@ -16,7 +16,6 @@ export default function VerifyEmailPage() {
   // Redirect to dashboard if already authenticated
   const { isChecking } = usePublicPageGuard();
 
-  if (isChecking) return null;
   const [verifying, setVerifying] = useState(true);
   const [verificationStatus, setVerificationStatus] = useState(null); // 'success' or 'error'
   const [verificationMessage, setVerificationMessage] = useState("");
@@ -61,6 +60,8 @@ export default function VerifyEmailPage() {
 
     performVerification();
   }, [searchParams, router]);
+
+  if (isChecking) return null;
 
   if (verifying) {
     return (

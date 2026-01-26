@@ -1,6 +1,6 @@
 "use client";
 
-import { Form, Input, Button, Typography, message } from "antd";
+import { Form, Input, Button, Typography, App } from "antd";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -9,42 +9,46 @@ import { usePublicPageGuard } from "@/lib/auth";
 const { Title, Text } = Typography;
 
 export default function ForgotPasswordPage() {
+  const { message } = App.useApp();
   const [form] = Form.useForm();
   const [submittable, setSubmittable] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  // 1. Get the guard status
   const { isChecking } = usePublicPageGuard();
 
-  if (isChecking) return null;
-
+  // 2. Helper function (not a hook, but keep it above the return)
   const shouldDisableButton = () => {
     const errors = form.getFieldsError();
     return errors.some(({ errors }) => errors.length);
   };
 
+  // 3. Move the useEffect UP (before the early return)
   useEffect(() => {
-    form
-      .validateFields({ validateOnly: true })
-      .then(() => {
-        setSubmittable(true);
-      })
-      .catch(() => {
-        setSubmittable(false);
-      });
-  }, [form]);
+    // Only run validation if we are no longer checking auth
+    if (!isChecking) {
+      form
+        .validateFields({ validateOnly: true })
+        .then(() => {
+          setSubmittable(true);
+        })
+        .catch(() => {
+          setSubmittable(false);
+        });
+    }
+  }, [form, isChecking]);
+
+  // 4. NOW you can perform the early return
+  if (isChecking) return null;
 
   const onFinish = async (values) => {
     setLoading(true);
     try {
       const response = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/forgot-password', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: values.email,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: values.email }),
       });
 
       const result = await response.json();
@@ -52,7 +56,6 @@ export default function ForgotPasswordPage() {
       if (result.success) {
         message.success("If email exists, a password reset link has been sent");
         form.resetFields();
-        // Redirect to login after 2 seconds
         setTimeout(() => {
           router.push('/login');
         }, 2000);
@@ -67,47 +70,31 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "#f5f5f5",
-        padding: "20px",
-      }}
+    <div style={{
+      minHeight: "100vh",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "#f5f5f5",
+      padding: "20px",
+    }}
     >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "500px",
-          backgroundColor: "white",
-          padding: "48px 40px",
-          borderRadius: "8px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-        }}
+      <div style={{
+        width: "100%",
+        maxWidth: "500px",
+        backgroundColor: "white",
+        padding: "48px 40px",
+        borderRadius: "8px",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+      }}
       >
-        <Title
-          level={2}
-          style={{
-            textAlign: "center",
-            marginBottom: "40px",
-            fontWeight: "bold",
-          }}
-        >
+        <Title level={2} style={{ textAlign: "center", marginBottom: "40px", fontWeight: "bold" }}>
           Quên mật khẩu
         </Title>
 
-        <div
-          style={{
-            textAlign: "center",
-            fontSize: "13px",
-            marginBottom: "16px",
-          }}
-        >
+        <div style={{ textAlign: "center", fontSize: "13px", marginBottom: "16px" }}>
           <Text>
-            Nhập email liên kết với tài khoản của bạn để nhận email hướng dẫn
-            đặt lại mật khẩu của bạn.
+            Nhập email liên kết với tài khoản của bạn để nhận email hướng dẫn đặt lại mật khẩu của bạn.
           </Text>
         </div>
 
@@ -122,11 +109,7 @@ export default function ForgotPasswordPage() {
           }}
         >
           <Form.Item
-            label={
-              <span style={{ fontSize: "14px" }}>
-                Email <span style={{ color: "red" }}>*</span>
-              </span>
-            }
+            label={<span style={{ fontSize: "14px" }}>Email <span style={{ color: "red" }}>*</span></span>}
             name="email"
             rules={[
               { required: true, message: "Vui lòng nhập email!" },

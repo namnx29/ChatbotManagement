@@ -23,8 +23,6 @@ export default function SendEmailPage() {
   // Redirect to dashboard if already authenticated
   const { isChecking } = usePublicPageGuard();
 
-  if (isChecking) return null;
-
   useEffect(() => {
     // Get email from localStorage or URL
     const storedEmail = localStorage.getItem('registerEmail');
@@ -47,6 +45,8 @@ export default function SendEmailPage() {
 
     return () => clearTimeout(timer);
   }, [countdown]);
+
+  if (isChecking) return null;
 
   const handleContinue = async () => {
     if (!email) {

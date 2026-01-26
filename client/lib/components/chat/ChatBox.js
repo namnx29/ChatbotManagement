@@ -622,6 +622,16 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 								{/* Tags Section */}
 								<div style={{ marginBottom: '18px' }}>
 									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
+										SĐT
+									</div>
+									<Input
+										value={conversation.phone || ''}
+										placeholder="Nhập số điện thoại"
+										style={{ width: '100%' }}
+									/>
+								</div>
+								<div style={{ marginBottom: '18px' }}>
+									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
 										Tag
 									</div>
 									<Select

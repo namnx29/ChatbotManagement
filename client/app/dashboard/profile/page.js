@@ -331,8 +331,6 @@ export default function ProfilePage() {
               }
             />
 
-            <DetailRow label="ID người dùng" value={<span>{userId}</span>} />
-
             <DetailRow
               label="Trạng thái"
               value={

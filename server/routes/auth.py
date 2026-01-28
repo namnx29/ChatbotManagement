@@ -111,7 +111,9 @@ def init_auth_routes(mongo_client):
             if not user.get('is_verified', False):
                 return jsonify({
                     'success': False,
-                    'message': 'Email not verified. Please check your email for verification link.'
+                    # 'message': 'Email not verified. Please check your email for verification link.',
+                    'email': email,
+                    'code': 'UNVERIFIED',
                 }), 403
 
             # Login the user using Flask-Login session management

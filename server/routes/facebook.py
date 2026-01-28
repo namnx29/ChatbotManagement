@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 PKCE_TTL = 600  # seconds (we reuse state storage for flow)
 
 
-def _emit_socket(event, payload, account_id=None, to_room=None):
+def _emit_socket(event, payload, account_id=None, to_room=None, organization_id=None):
     """Emit a socket event to a specific account room or broadcast.
     
     Args:
@@ -34,6 +34,7 @@ def _emit_socket(event, payload, account_id=None, to_room=None):
             return False
         
         # SECURITY FIX: If account_id provided, emit to account-specific room
+        emitted_rooms = []
         if account_id:
             room = to_room or f"account:{account_id}"
             try:
@@ -41,7 +42,18 @@ def _emit_socket(event, payload, account_id=None, to_room=None):
             except TypeError:
                 # Fallback for older versions
                 socketio.emit(event, payload, room=room)
+            emitted_rooms.append(room)
             logger.debug(f"Emitted {event} to room {room}")
+
+        # If organization_id provided, also emit to organization room so staff members receive events
+        if organization_id:
+            org_room = f"organization:{organization_id}"
+            try:
+                socketio.emit(event, payload, room=org_room)
+            except TypeError:
+                socketio.emit(event, payload, room=org_room)
+            emitted_rooms.append(org_room)
+            logger.debug(f"Emitted {event} to organization room {org_room}")
         else:
             # Legacy: broadcast to all (use only for public events)
             try:
@@ -236,23 +248,23 @@ def facebook_callback():
             from models.chatbot import ChatbotModel
             cb_model = ChatbotModel(current_app.mongo_client)
             cb = cb_model.get_chatbot(conflict_chatbot_id)
-            if cb:
-                conflict_bot_name = cb.get('name')
-        except Exception:
-            conflict_bot_name = None
-
-        if 'application/json' in accept or request.args.get('format') == 'json' or request.is_json:
-            return jsonify({'success': False, 'message': 'Page already connected to another chatbot', 'conflict': {'type': 'oa_assigned', 'chatbotId': conflict_chatbot_id, 'chatbotName': conflict_bot_name, 'oa_id': page_id}}), 409
-
-        from urllib.parse import quote_plus
-        params = f"platform=facebook&oa_id={page_id}&status=conflict&conflict_type=oa_assigned&conflict_chatbotId={conflict_chatbot_id}&conflict_chatbotName={quote_plus(conflict_bot_name or '')}"
-        if chatbot_id:
-            target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot/{chatbot_id}/platform-intergrate?{params}"
-        else:
-            target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot?{params}"
-        from flask import redirect
-        try:
-            del_key(f"facebook:pkce:{state}")
+            try:
+                if not deduped:
+                    _emit_socket('new-message', {
+                        'platform': 'facebook',
+                        'oa_id': integration.get('oa_id'),
+                        'sender_id': customer_platform_id,
+                        'message': message_text,
+                        'message_doc': incoming_doc,
+                        'conv_id': conv_id,
+                        'conversation_id': conversation_id,  # New field (already string)
+                        'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
+                        'direction': direction,
+                        'sender_profile': sender_profile,
+                    }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+                    logger.info(f'Emitted new-message to account {account_id_owner} and org {integration.get("organizationId")} via socket')
+            except Exception as e:
+                logger.error(f'Failed to emit new-message via socket: {e}')
         except Exception:
             pass
         return redirect(target, code=302)
@@ -260,6 +272,11 @@ def facebook_callback():
     already_connected = False
     if existing_global and existing_global.get('accountId') == account_id and (not existing_global.get('chatbotId') or existing_global.get('chatbotId') == chatbot_id):
         already_connected = True
+
+    # Get user's organization for integration isolation
+    from models.user import UserModel
+    user_model = UserModel(current_app.mongo_client)
+    user_org_id = user_model.get_user_organization_id(account_id)
 
     integration = integration_model.create_or_update(
         account_id=account_id,
@@ -273,6 +290,7 @@ def facebook_callback():
         name=page_name,
         avatar_url=avatar_url,
         chatbot_id=chatbot_id,
+        organization_id=user_org_id,
     )
 
     # Log integration result for easier debugging and verification
@@ -486,6 +504,7 @@ def webhook_event():
                     'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
                 },
                 account_id=integration.get('accountId'),  # SECURITY FIX
+                organization_id=integration.get('organizationId'),
             )
             
             conversation_id = conversation_doc.get('_id')
@@ -519,6 +538,7 @@ def webhook_event():
                             is_read=True,
                             conversation_id=conversation_id,
                             account_id=integration.get('accountId'),
+                            organization_id=integration.get('organizationId'),
                         )
                 else:
                     incoming_doc = message_model.add_message(
@@ -532,6 +552,7 @@ def webhook_event():
                         is_read=False,
                         conversation_id=conversation_id,
                         account_id=integration.get('accountId'),
+                        organization_id=integration.get('organizationId'),
                     )
             except Exception as e:
                 logger.error(f"Failed to persist message: {e}")
@@ -559,16 +580,16 @@ def webhook_event():
             
             # Emit new message event (unless deduped by outgoing echo)
             try:
-                if not deduped:
-                    _emit_socket('new-message', payload, account_id=account_id_owner)
-                    logger.info(f'Emitted new-message to account {account_id_owner} via socket')
+                    if not deduped:
+                        _emit_socket('new-message', payload, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+                        logger.info(f'Emitted new-message to account {account_id_owner} and org {integration.get("organizationId")} via socket')
             except Exception as e:
                 logger.error(f'Failed to emit new-message via socket: {e}')
             
             # Emit conversation update event (for sidebar refresh)
             try:
-                if not deduped:
-                    _emit_socket('update-conversation', {
+                    if not deduped:
+                        _emit_socket('update-conversation', {
                         'conversation_id': conversation_id,  # Already string
                         'conv_id': conv_id,  # Legacy format
                         'oa_id': integration.get('oa_id'),
@@ -580,8 +601,8 @@ def webhook_event():
                         'unread_count': conversation_doc.get('unread_count', 0),
                         'customer_info': conversation_doc.get('customer_info', {}),
                         'platform': 'facebook',
-                    }, account_id=account_id_owner)
-                    logger.info(f'Emitted update-conversation to account {account_id_owner} via socket')
+                    }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+                        logger.info(f'Emitted update-conversation to account {account_id_owner} and org {integration.get("organizationId")} via socket')
             except Exception:
                 logger.error('Failed to emit update-conversation via socket')
 
@@ -598,14 +619,29 @@ def list_conversations():
     if not oa_id:
         return jsonify({'success': False, 'message': 'oa_id is required'}), 400
 
-    # SECURITY FIX: Validate that the requesting account owns this oa_id integration
+    # SECURITY FIX: Validate organization access using organizationId
     try:
+        from models.user import UserModel
         integration_model = IntegrationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
+        
         integration = integration_model.find_by_platform_and_oa('facebook', oa_id)
         if not integration:
             return jsonify({'success': False, 'message': 'Integration not found'}), 404
-        if integration.get('accountId') != account_id:
-            logger.warning(f"Unauthorized access attempt: account {account_id} tried to access oa_id {oa_id} owned by {integration.get('accountId')}")
+        
+        # Check authorization via organizationId (staff can access admin's org)
+        user_org_id = user_model.get_user_organization_id(account_id)
+        integration_org_id = integration.get('organizationId')
+        
+        # Allow access if: same organizationId OR (old data without organizationId) user is the owner
+        if integration_org_id and user_org_id and integration_org_id == user_org_id:
+            # Organization match - allow
+            pass
+        elif integration.get('accountId') == account_id:
+            # Direct account match - allow (backward compat)
+            pass
+        else:
+            logger.warning(f"Unauthorized access attempt: account {account_id} (org {user_org_id}) tried to access oa_id {oa_id} owned by account {integration.get('accountId')} (org {integration_org_id})")
             return jsonify({'success': False, 'message': 'Unauthorized access to this page'}), 403
     except Exception as e:
         logger.error(f"Error validating integration ownership: {e}")
@@ -618,9 +654,17 @@ def list_conversations():
         conversation_model = ConversationModel(current_app.mongo_client)
         customer_model = CustomerModel(current_app.mongo_client)
         
-        # Get conversations from new structure
-        convs = conversation_model.find_by_oa(oa_id, limit=100)
-        logger.info(f"Found {len(convs)} conversations from new structure for oa_id {oa_id}")
+        # Get organization context for query
+        user_org_id = user_model.get_user_organization_id(account_id) if 'user_model' in locals() else None
+        
+        # Get conversations using organizationId for org-level isolation
+        if user_org_id:
+            convs = conversation_model.list_by_organization(user_org_id, limit=100)
+            logger.info(f"Found {len(convs)} conversations from organization {user_org_id}")
+        else:
+            # Fallback to account-based query for backward compat
+            convs = conversation_model.find_by_oa(oa_id, limit=100, account_id=account_id)
+            logger.info(f"Found {len(convs)} conversations from oa_id {oa_id} with account_id {account_id}")
         if len(convs) == 0:
             # Try legacy method as fallback
             logger.info(f"No conversations in new structure, trying legacy method")
@@ -808,14 +852,18 @@ def get_conversation_messages(conv_id):
     try:
         from models.conversation import ConversationModel
         from models.message import MessageModel
+        from models.user import UserModel
         
         conversation_model = ConversationModel(current_app.mongo_client)
         message_model = MessageModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
         
         # Try to find conversation to get conversation_id
-        # SECURITY FIX: Pass account_id to ensure account isolation
+        # Use organizationId for org-level isolation
         customer_id = f"facebook:{sender_id}"
-        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=account_id)
+        user_org_id = user_model.get_user_organization_id(account_id)
+        
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org_id, account_id=account_id)
         conversation_id = conversation_doc.get('_id') if conversation_doc else None
         
         # Ensure conversation_id is a string if it exists
@@ -825,13 +873,23 @@ def get_conversation_messages(conv_id):
             except Exception:
                 conversation_id = None
         
-        # Get messages using conversation_id if available, otherwise fallback to legacy
-        msgs = message_model.get_messages(
-            platform, oa_id, sender_id, 
-            limit=limit, skip=skip, 
-            conversation_id=conversation_id,
-            account_id=account_id
-        )
+        # Get messages using conversation_id and organizationId if available
+        if user_org_id and conversation_id:
+            # Primary: Use organization-based query
+            msgs = message_model.get_by_organization_and_conversation(
+                user_org_id, conversation_id,
+                limit=limit, skip=skip
+            )
+            logger.info(f"Retrieved {len(msgs)} messages using organization context")
+        else:
+            # Fallback: Legacy account-based query
+            msgs = message_model.get_messages(
+                platform, oa_id, sender_id, 
+                limit=limit, skip=skip, 
+                conversation_id=conversation_id,
+                account_id=account_id
+            )
+            logger.info(f"Retrieved {len(msgs)} messages using legacy query")
         logger.info(f"Retrieved {len(msgs)} messages for conversation {conv_id}")
     except Exception as e:
         logger.error(f"Failed to fetch messages: {e}")
@@ -873,22 +931,28 @@ def mark_conversation_read(conv_id):
     try:
         from models.conversation import ConversationModel
         from models.message import MessageModel
+        from models.user import UserModel
         
         conversation_model = ConversationModel(current_app.mongo_client)
         message_model = MessageModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
         
         customer_id = f"facebook:{sender_id}"
-        # SECURITY FIX: Pass account_id to ensure account isolation
-        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=account_id)
+        user_org_id = user_model.get_user_organization_id(account_id)
+        
+        # Find conversation using organizationId
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org_id, account_id=account_id)
         conversation_id = conversation_doc.get('_id') if conversation_doc else None
         
-        # Mark conversation as read in conversations collection
-        # SECURITY FIX: Pass account_id to ensure account isolation
+        # Mark conversation as read
         if conversation_doc:
-            conversation_model.mark_read(oa_id, customer_id, account_id=account_id)
+            conversation_model.mark_read(oa_id, customer_id, account_id=account_id, organization_id=user_org_id)
         
-        # Mark messages as read
-        modified = message_model.mark_read(platform, oa_id, sender_id, conversation_id=conversation_id)
+        # Mark messages as read using organization context
+        if user_org_id and conversation_id:
+            modified = message_model.mark_as_read_by_organization(user_org_id, conversation_id)
+        else:
+            modified = message_model.mark_read(platform, oa_id, sender_id, conversation_id=conversation_id)
         return jsonify({'success': True, 'updated': modified}), 200
     except Exception as e:
         logger.error(f"Failed to mark conversation read: {e}")
@@ -914,10 +978,27 @@ def send_conversation_message(conv_id):
     if not text and not image:
         return jsonify({'success': False, 'message': 'text or image is required'}), 400
 
-    # Verify integration ownership
+    # Verify integration ownership using organizationId
+    from models.user import UserModel
     model = IntegrationModel(current_app.mongo_client)
+    user_model = UserModel(current_app.mongo_client)
     integration = model.find_by_platform_and_oa(platform, oa_id)
-    if not integration or integration.get('accountId') != account_id:
+    
+    if not integration:
+        return jsonify({'success': False, 'message': 'Integration not found'}), 404
+    
+    # Check organization match for authorization
+    user_org_id = user_model.get_user_organization_id(account_id)
+    integration_org_id = integration.get('organizationId')
+    
+    if integration_org_id and user_org_id and integration_org_id == user_org_id:
+        # Organization match - allow
+        pass
+    elif integration.get('accountId') == account_id:
+        # Direct account match - allow
+        pass
+    else:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
         return jsonify({'success': False, 'message': 'Not authorized or integration not found'}), 403
 
     try:
@@ -944,7 +1025,7 @@ def send_conversation_message(conv_id):
         chatbot_data = chatbot_model.get_chatbot(integration.get('chatbotId'))
         # Get or create conversation
         # SECURITY FIX: Include account_id for account isolation
-        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=integration.get('accountId'))
+        conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, customer_id, account_id=integration.get('accountId'), organization_id=integration.get('organizationId'))
         if not conversation_doc:
             conversation_doc = conversation_model.upsert_conversation(
                 oa_id=oa_id,
@@ -955,6 +1036,7 @@ def send_conversation_message(conv_id):
                     'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
                 },
                 account_id=integration.get('accountId'),  # SECURITY FIX
+                organization_id=integration.get('organizationId'),
             )
         
         conversation_id = conversation_doc.get('_id')
@@ -986,6 +1068,7 @@ def send_conversation_message(conv_id):
                 'avatar': chatbot_data.get('avatar_url') if chatbot_data else None,
             },
             account_id=integration.get('accountId'),  # SECURITY FIX
+            organization_id=integration.get('organizationId'),
         )
         
         # SECURITY FIX: Emit socket events only to the account that owns this integration
@@ -1006,6 +1089,7 @@ def send_conversation_message(conv_id):
             is_read=True,
             conversation_id=conversation_id,
             account_id=account_id_owner,
+            organization_id=integration.get('organizationId'),
         )
         
         # Build recipient_profile from customer_doc if available
@@ -1025,7 +1109,7 @@ def send_conversation_message(conv_id):
                 'sent_at': datetime.utcnow().isoformat() + 'Z',
                 'sender_profile': page_profile,
                 'recipient_profile': recipient_profile,
-            }, account_id=account_id_owner)
+            }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
             
             # Emit conversation update
             _emit_socket('update-conversation', {
@@ -1040,7 +1124,7 @@ def send_conversation_message(conv_id):
                 'unread_count': conversation_doc.get('unread_count', 0),
                 'customer_info': conversation_doc.get('customer_info', {}),
                 'platform': 'facebook',
-            }, account_id=account_id_owner)
+            }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
         except Exception as e:
             logger.error(f"Failed to emit socket event for outgoing message: {e}")
         return jsonify({'success': True, 'data': {'sent': sent_doc, 'send_response': send_resp}}), 200

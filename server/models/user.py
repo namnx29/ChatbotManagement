@@ -38,6 +38,7 @@ class UserModel:
         self.collection.create_index('email', unique=True, sparse=True)
         self.collection.create_index('accountId', unique=True)
         self.collection.create_index('verification_token', sparse=True)
+        self.collection.create_index('organizationId')
     
     def create_user(self, email, password, name=None, phone=None, role='admin', parent_account_id=None, created_by=None):
         """
@@ -68,7 +69,8 @@ class UserModel:
         # Generate verification token and accountId
         verification_token = secrets.token_urlsafe(32)
         account_id = str(uuid.uuid4())
-        
+        organization_id = str(uuid.uuid4()) if role == 'admin' else None
+
         # Create user document
         user_data = {
             'email': email,
@@ -76,6 +78,7 @@ class UserModel:
             'name': name or (email.split('@')[0] if email else 'User'),
             'username': None,  # Will be set during staff creation or later
             'role': role,  # 'admin' or 'staff'
+            'organizationId': organization_id,
             'parent_account_id': parent_account_id,  # None for admin, admin's accountId for staff
             'created_by': created_by,  # Who created this account
             'is_verified': (role == 'staff'),  # Staff accounts auto-verified
@@ -105,7 +108,7 @@ class UserModel:
         """Find user by accountId"""
         return self.collection.find_one({'accountId': account_id})
     
-    def verify_password(self, user, password):
+    def verify_password(self, user, password, role='admin'):
         """
         Verify user password
         
@@ -118,6 +121,10 @@ class UserModel:
         """
         if not user:
             return False
+        
+        if role == 'staff' and 'username' in user:
+            # Staff users may have passwords stored as plain text (legacy support)
+            return user['password'] == password
         return bcrypt.checkpw(password.encode('utf-8'), user['password'])
     
     def verify_email(self, email, account_id, token):
@@ -319,7 +326,8 @@ class UserModel:
         
         # Return non-sensitive profile data
         return {
-            'email': user['email'],
+            'email': user['email'] if 'email' in user else None,
+            'username': user.get('username') if 'username' in user else None,
             'name': user.get('name'),
             'accountId': user['accountId'],
             'phone_number': user.get('phone_number'),
@@ -375,8 +383,10 @@ class UserModel:
         if not user:
             return {'error': 'User not found'}
         
+        role = user.get('role', 'admin')
+        
         # Verify current password
-        if not self.verify_password(user, current_password):
+        if not self.verify_password(user, current_password, role):
             return {'error': 'Current password is incorrect'}
         
         # Hash new password
@@ -387,7 +397,7 @@ class UserModel:
             {'_id': user['_id']},
             {
                 '$set': {
-                    'password': hashed_password,
+                    'password': role == 'staff' and new_password or hashed_password,
                     'updated_at': datetime.utcnow(),
                 }
             },
@@ -427,11 +437,12 @@ class UserModel:
         return result
 
     # ==================== STAFF MANAGEMENT METHODS ====================
-    def find_by_username(self, username, parent_account_id=None):
+
+    def find_by_username(self, username):
         """Find user by username"""
         query = {'username': username}
-        if parent_account_id:
-            query['parent_account_id'] = parent_account_id
+        # if parent_account_id:
+        #     query['parent_account_id'] = parent_account_id
         return self.collection.find_one(query)
 
     def create_staff(self, parent_account_id, username, name, phone_number=None, password=None):
@@ -456,6 +467,8 @@ class UserModel:
         if not parent:
             raise ValueError('Unauthorized: Admin account required')
         
+        parent_organization_id = parent.get('organizationId')
+
         # Check username uniqueness within parent account
         existing = self.collection.find_one({
             'parent_account_id': parent_account_id,
@@ -475,6 +488,7 @@ class UserModel:
             'password': password,
             'is_verified': True,
             'role': 'staff',
+            'organizationId': parent_organization_id,
             'parent_account_id': parent_account_id,
             'avatar_url': None,
             'created_by': parent_account_id,
@@ -489,7 +503,7 @@ class UserModel:
             staff_data['_id'] = result.inserted_id
             return staff_data
         except DuplicateKeyError:
-            raise ValueError('Username already exists 2')
+            raise ValueError('Username already exists')
 
     def list_staff_accounts(self, parent_account_id, skip=0, limit=50, search=None):
         """
@@ -691,3 +705,17 @@ class UserModel:
             'password': password_val,
             'username': staff.get('username')
         }
+    
+    def get_user_organization_id(self, account_id):
+        """Get organization ID for a user account
+        
+        Args:
+            account_id (str): User's account ID
+            
+        Returns:
+            str: Organization ID or None if user not found
+        """
+        user = self.collection.find_one({'accountId': account_id})
+        if not user:
+            return None
+        return user.get('organizationId')

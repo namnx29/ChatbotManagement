@@ -1,20 +1,50 @@
 'use client';
 
-import { Modal, Form, Input, Button } from 'antd';
+import { Modal, Form, Input, Button, App } from 'antd';
 import { UserOutlined, PhoneOutlined, LockOutlined, IdcardOutlined } from '@ant-design/icons';
+import { useState } from 'react';
+import { createStaff } from '@/lib/api';
 
-export default function AddMemberModal({ open, onClose }) {
+export default function AddMemberModal({ open, onClose, onSuccess }) {
+  const { message } = App.useApp();
   const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = () => {
-    form.validateFields().then((values) => {
-      console.log('Form values:', values);
-      // Handle form submission here
-      form.resetFields();
-      onClose();
-    }).catch((errorInfo) => {
-      console.log('Validation failed:', errorInfo);
-    });
+  const handleSubmit = async () => {
+    try {
+      const values = await form.validateFields();
+      setLoading(true);
+
+      const result = await createStaff({
+        username: values.username,
+        name: values.name,
+        phoneNumber: values.phone,
+        password: values.password,
+      });
+
+      if (result.success) {
+        message.success(result.message || 'Thêm thành viên thành công');
+        form.resetFields();
+        onClose();
+        // Notify parent to refresh staff list
+        if (onSuccess) {
+          onSuccess(result.data);
+        }
+      } else {
+        message.error(result.message || 'Thêm thành viên thất bại');
+      }
+    } catch (error) {
+      if (error.errorFields) {
+        // Form validation error
+        console.log('Validation failed:', error);
+      } else {
+        // API error
+        message.error(error.message || 'Lỗi khi thêm thành viên');
+        console.error('Create staff error:', error);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCancel = () => {
@@ -26,6 +56,8 @@ export default function AddMemberModal({ open, onClose }) {
     <Modal
       open={open}
       onCancel={handleCancel}
+      destroyOnHidden
+      forceRender
       footer={null}
       width={500}
       title={
@@ -33,10 +65,11 @@ export default function AddMemberModal({ open, onClose }) {
           Thêm thành viên
         </h2>
       }
-    >
+      >
       <Form
         form={form}
         layout="vertical"
+        onFinish={handleSubmit}
         style={{ marginTop: '24px' }}
         requiredMark={false}
       >
@@ -53,6 +86,7 @@ export default function AddMemberModal({ open, onClose }) {
             prefix={<UserOutlined style={{ color: '#999' }} />}
             placeholder="Nhập tên đăng nhập"
             size="large"
+            disabled={loading}
           />
         </Form.Item>
 
@@ -68,6 +102,7 @@ export default function AddMemberModal({ open, onClose }) {
             prefix={<IdcardOutlined style={{ color: '#999' }} />}
             placeholder="Nhập họ và tên"
             size="large"
+            disabled={loading}
           />
         </Form.Item>
 
@@ -83,6 +118,7 @@ export default function AddMemberModal({ open, onClose }) {
             prefix={<PhoneOutlined style={{ color: '#999' }} />}
             placeholder="Nhập số điện thoại"
             size="large"
+            disabled={loading}
           />
         </Form.Item>
 
@@ -99,6 +135,7 @@ export default function AddMemberModal({ open, onClose }) {
             prefix={<LockOutlined style={{ color: '#999' }} />}
             placeholder="Nhập mật khẩu"
             size="large"
+            disabled={loading}
           />
         </Form.Item>
 
@@ -111,17 +148,14 @@ export default function AddMemberModal({ open, onClose }) {
             marginTop: '32px',
           }}
         >
-          <Button size="large" onClick={handleCancel}>
+          <Button size="large" onClick={handleCancel} disabled={loading}>
             Hủy
           </Button>
           <Button
             type="primary"
             size="large"
             onClick={handleSubmit}
-            style={{
-              background: '#6c3fb5',
-              borderColor: '#6c3fb5',
-            }}
+            loading={loading}
           >
             Thêm thành viên
           </Button>

@@ -4,6 +4,8 @@ from pymongo.errors import DuplicateKeyError
 import bcrypt
 import uuid
 import secrets
+import base64
+import jwt
 from config import Config
 from flask_login import UserMixin
 
@@ -31,20 +33,24 @@ class UserModel:
         self._create_indexes()
     
     def _create_indexes(self):
-        """Create necessary indexes on the users collection"""
-        self.collection.create_index('email', unique=True)
+        """Create necessary indexes on the users collection"""        
+        # Create new indexes
+        self.collection.create_index('email', unique=True, sparse=True)
         self.collection.create_index('accountId', unique=True)
         self.collection.create_index('verification_token', sparse=True)
     
-    def create_user(self, email, password, name=None, phone=None):
+    def create_user(self, email, password, name=None, phone=None, role='admin', parent_account_id=None, created_by=None):
         """
         Create a new user in the database
         
         Args:
-            email (str): User email
+            email (str): User email (required for admin, null for staff)
             password (str): Plain text password
             name (str): User name (optional)
             phone (str): User phone number (optional)
+            role (str): 'admin' or 'staff' (default: 'admin')
+            parent_account_id (str): Parent admin's accountId (for staff accounts)
+            created_by (str): accountId of user who created this account
             
         Returns:
             dict: Created user data with accountId and verification_token
@@ -52,8 +58,8 @@ class UserModel:
         Raises:
             ValueError: If email already exists
         """
-        # Check if user already exists
-        if self.collection.find_one({'email': email}):
+        # Check if user already exists (only for admin accounts with email)
+        if email and self.collection.find_one({'email': email}):
             raise ValueError('Email already registered')
         
         # Hash password
@@ -67,17 +73,23 @@ class UserModel:
         user_data = {
             'email': email,
             'password': hashed_password,
-            'name': name or email.split('@')[0],  # Default to email username part if not provided
-            'is_verified': False,
-            'verification_token': verification_token,
-            'verification_token_expires_at': datetime.utcnow() + timedelta(seconds=Config.VERIFICATION_TOKEN_EXPIRY),
+            'name': name or (email.split('@')[0] if email else 'User'),
+            'username': None,  # Will be set during staff creation or later
+            'role': role,  # 'admin' or 'staff'
+            'parent_account_id': parent_account_id,  # None for admin, admin's accountId for staff
+            'created_by': created_by,  # Who created this account
+            'is_verified': (role == 'staff'),  # Staff accounts auto-verified
+            'verification_token': verification_token if role == 'admin' else None,
+            'verification_token_expires_at': (datetime.utcnow() + timedelta(seconds=Config.VERIFICATION_TOKEN_EXPIRY)) if role == 'admin' else None,
             'accountId': account_id,
             'phone_number': phone,
             'avatar_url': None,
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow(),
         }
-        
+        if email:
+            user_data['email'] = email
+
         try:
             result = self.collection.insert_one(user_data)
             user_data['_id'] = result.inserted_id
@@ -414,3 +426,268 @@ class UserModel:
         
         return result
 
+    # ==================== STAFF MANAGEMENT METHODS ====================
+    def find_by_username(self, username, parent_account_id=None):
+        """Find user by username"""
+        query = {'username': username}
+        if parent_account_id:
+            query['parent_account_id'] = parent_account_id
+        return self.collection.find_one(query)
+
+    def create_staff(self, parent_account_id, username, name, phone_number=None, password=None):
+        """
+        Create a new staff account
+        
+        Args:
+            parent_account_id (str): Admin's accountId
+            username (str): Staff username (unique per admin)
+            name (str): Staff full name
+            phone_number (str): Phone number (optional)
+            password (str): Staff password
+            
+        Returns:
+            dict: Created staff data
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        # Verify parent account is admin
+        parent = self.collection.find_one({'accountId': parent_account_id, 'role': 'admin'})
+        if not parent:
+            raise ValueError('Unauthorized: Admin account required')
+        
+        # Check username uniqueness within parent account
+        existing = self.collection.find_one({
+            'parent_account_id': parent_account_id,
+            'username': username
+        })
+        if existing:
+            raise ValueError('Username already exists')
+        
+        # Create staff account
+        account_id = str(uuid.uuid4())
+        
+        staff_data = {
+            'accountId': account_id,
+            'username': username,
+            'name': name,
+            'phone_number': phone_number,
+            'password': password,
+            'is_verified': True,
+            'role': 'staff',
+            'parent_account_id': parent_account_id,
+            'avatar_url': None,
+            'created_by': parent_account_id,
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'verification_token': None,
+            'verification_token_expires_at': None,
+        }
+        
+        try:
+            result = self.collection.insert_one(staff_data)
+            staff_data['_id'] = result.inserted_id
+            return staff_data
+        except DuplicateKeyError:
+            raise ValueError('Username already exists 2')
+
+    def list_staff_accounts(self, parent_account_id, skip=0, limit=50, search=None):
+        """
+        List all staff accounts for an admin
+        
+        Args:
+            parent_account_id (str): Admin's accountId
+            skip (int): Skip count for pagination
+            limit (int): Limit for pagination
+            search (str): Search string for name/username filter
+            
+        Returns:
+            tuple: (staff list, total count)
+        """
+        query = {
+            'parent_account_id': parent_account_id,
+            'role': 'staff'
+        }
+        
+        if search:
+            query['$or'] = [
+                {'name': {'$regex': search, '$options': 'i'}},
+                {'username': {'$regex': search, '$options': 'i'}}
+            ]
+        
+        cursor = self.collection.find(query).skip(skip).limit(limit)
+        staff = list(cursor)
+        total = self.collection.count_documents(query)
+        
+        return staff, total
+
+    def update_staff(self, staff_account_id, parent_account_id, **updates):
+        """
+        Update staff account fields
+        
+        Args:
+            staff_account_id (str): Staff accountId
+            parent_account_id (str): Parent admin's accountId (for authorization)
+            **updates: Fields to update (name, username, phone_number, new_password)
+            
+        Returns:
+            dict: Updated staff document
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        # Verify staff belongs to parent
+        staff = self.collection.find_one({
+            'accountId': staff_account_id,
+            'parent_account_id': parent_account_id,
+            'role': 'staff'
+        })
+        if not staff:
+            raise ValueError('Staff account not found or unauthorized')
+        
+        # Build update set
+        update_fields = {
+            'updated_at': datetime.utcnow()
+        }
+        
+        # Update name
+        if 'name' in updates and updates['name'] != staff.get('name'):
+            update_fields['name'] = updates['name']
+        
+        # Update username (check uniqueness)
+        if 'username' in updates and updates['username'] != staff.get('username'):
+            existing = self.collection.find_one({
+                'parent_account_id': parent_account_id,
+                'username': updates['username'],
+                'accountId': {'$ne': staff_account_id}
+            })
+            if existing:
+                raise ValueError('Username already exists')
+            update_fields['username'] = updates['username']
+        
+        # Update phone
+        if 'phone_number' in updates:
+            update_fields['phone_number'] = updates['phone_number'] or None
+        
+        # Update password if provided
+        if 'new_password' in updates and updates['new_password']:
+            update_fields['password'] = updates['new_password']
+        
+        # Only update if there are changes
+        if len(update_fields) == 1:  # Only updated_at
+            return staff
+        
+        # Update and return
+        result = self.collection.find_one_and_update(
+            {'_id': staff['_id']},
+            {'$set': update_fields},
+            return_document=True
+        )
+        
+        return result
+
+    def delete_staff(self, staff_account_id, parent_account_id):
+        """
+        Delete a staff account
+        
+        Args:
+            staff_account_id (str): Staff accountId
+            parent_account_id (str): Parent admin's accountId (for authorization)
+            
+        Returns:
+            bool: True if deleted
+            
+        Raises:
+            ValueError: If staff not found or unauthorized
+        """
+        # Verify staff belongs to parent
+        staff = self.collection.find_one({
+            'accountId': staff_account_id,
+            'parent_account_id': parent_account_id,
+            'role': 'staff'
+        })
+        if not staff:
+            raise ValueError('Staff account not found or unauthorized')
+        
+        # Delete
+        self.collection.delete_one({'_id': staff['_id']})
+        return True
+
+    def verify_admin_password(self, admin_account_id, password):
+        """
+        Verify admin password and return a session token valid for 5 minutes
+        
+        Args:
+            admin_account_id (str): Admin's accountId
+            password (str): Admin's password
+            
+        Returns:
+            dict: {token, expires_at}
+            
+        Raises:
+            ValueError: If admin not found or password incorrect
+        """
+        admin = self.collection.find_one({'accountId': admin_account_id, 'role': 'admin'})
+        if not admin:
+            raise ValueError('Admin account not found')
+        
+        if not self.verify_password(admin, password):
+            raise ValueError('Invalid password')
+        
+        # Generate session token (5 minute expiry)
+        session_expires = datetime.utcnow() + timedelta(minutes=5)
+        token_data = {
+            'admin_account_id': admin_account_id,
+            'purpose': 'view_staff_password',
+            'exp': int(session_expires.timestamp())
+        }
+        token = jwt.encode(token_data, Config.SECRET_KEY, algorithm='HS256')
+        
+        return {
+            'token': token,
+            'expires_at': session_expires.isoformat()
+        }
+
+    def get_staff_password(self, staff_account_id, parent_account_id, verification_token):
+        """
+        Get staff password only if verification token is valid
+        
+        Args:
+            staff_account_id (str): Staff accountId
+            parent_account_id (str): Parent admin's accountId
+            verification_token (str): JWT verification token
+            
+        Returns:
+            dict: {password, username}
+            
+        Raises:
+            ValueError: If verification fails or staff not found
+        """
+        # Verify the token
+        try:
+            decoded = jwt.decode(verification_token, Config.SECRET_KEY, algorithms=['HS256'])
+            if decoded.get('admin_account_id') != parent_account_id:
+                raise ValueError('Token invalid for this admin')
+        except jwt.ExpiredSignatureError:
+            raise ValueError('Verification session expired')
+        except jwt.InvalidTokenError:
+            raise ValueError('Invalid verification token')
+        
+        staff = self.db.users.find_one({
+            "accountId": staff_account_id, 
+            "parent_account_id": parent_account_id
+        })
+
+        if not staff:
+            raise ValueError("Staff not found")
+
+        password_val = staff.get('password', '')
+
+        # FIX: Check if the password is bytes and decode it
+        if isinstance(password_val, bytes):
+            password_val = password_val.decode('utf-8')
+
+        return {
+            'password': password_val,
+            'username': staff.get('username')
+        }

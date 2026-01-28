@@ -955,3 +955,165 @@ export async function updateConversationNickname(accountId, oaId, customerId, ni
     throw error;
   }
 }
+
+// ==================== STAFF MANAGEMENT API FUNCTIONS ====================
+
+export async function createStaff(staffData) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const response = await fetch(`${API_BASE_URL}/api/user/staff`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({
+        username: staffData.username,
+        name: staffData.name,
+        phoneNumber: staffData.phoneNumber,
+        password: staffData.password,
+      }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /user/staff]:', error);
+    throw error;
+  }
+}
+
+export async function listStaffAccounts(skip = 0, limit = 50, search = null) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const params = new URLSearchParams({
+      skip: skip.toString(),
+      limit: limit.toString(),
+    });
+    if (search) {
+      params.append('search', search);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/user/staff?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        'X-Account-Id': accountId,
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /user/staff]:', error);
+    throw error;
+  }
+}
+
+export async function updateStaff(staffAccountId, updates) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const response = await fetch(`${API_BASE_URL}/api/user/staff/${encodeURIComponent(staffAccountId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify(updates),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [PUT /user/staff/:id]:', error);
+    throw error;
+  }
+}
+
+export async function deleteStaff(staffAccountId) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const response = await fetch(`${API_BASE_URL}/api/user/staff/${encodeURIComponent(staffAccountId)}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Account-Id': accountId,
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [DELETE /user/staff/:id]:', error);
+    throw error;
+  }
+}
+
+export async function verifyAdminPassword(password) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const response = await fetch(`${API_BASE_URL}/api/user/verify-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ password }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /user/verify-password]:', error);
+    throw error;
+  }
+}
+
+export async function getStaffPassword(staffAccountId, verificationToken) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/user/staff/${encodeURIComponent(staffAccountId)}/password?token=${encodeURIComponent(verificationToken)}`,
+      {
+        method: 'GET',
+        headers: {
+          'X-Account-Id': accountId,
+        },
+      }
+    );
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /user/staff/:id/password]:', error);
+    throw error;
+  }
+}

@@ -229,4 +229,274 @@ def init_user_routes(mongo_client):
             logger.error(f"Change name error: {str(e)}")
             return jsonify({'success': False, 'message': 'Name change failed'}), 500
 
+    # ==================== STAFF MANAGEMENT ROUTES ====================
+
+    @user_bp.route('/staff', methods=['POST'])
+    def create_staff():
+        """Create a new staff account"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'message': 'No data provided'}), 400
+            
+            # Extract fields
+            username = data.get('username', '').strip()
+            name = data.get('name', '').strip()
+            phone_number = data.get('phoneNumber', '').strip()
+            password = data.get('password', '')
+            
+            # Validation
+            if not username:
+                return jsonify({'success': False, 'message': 'Username is required'}), 400
+            if not name:
+                return jsonify({'success': False, 'message': 'Name is required'}), 400
+            if not password:
+                return jsonify({'success': False, 'message': 'Password is required'}), 400
+            
+            if len(username) < 3:
+                return jsonify({'success': False, 'message': 'Username must be at least 3 characters'}), 400
+            if len(name) < 2 or len(name) > 50:
+                return jsonify({'success': False, 'message': 'Name must be between 2 and 50 characters'}), 400
+            if len(password) < 6:
+                return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
+            
+            # Create staff
+            staff = user_model.create_staff(
+                parent_account_id=admin_account_id,
+                username=username,
+                name=name,
+                phone_number=phone_number if phone_number else None,
+                password=password
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Staff account created successfully',
+                'data': {
+                    'accountId': staff['accountId'],
+                    'username': staff['username'],
+                    'name': staff['name'],
+                    'phoneNumber': staff['phone_number']
+                }
+            }), 201
+        
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Create staff error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to create staff'}), 500
+
+    @user_bp.route('/staff', methods=['GET'])
+    def list_staff():
+        """List staff accounts for the authenticated admin"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            # Get pagination parameters
+            skip = request.args.get('skip', 0, type=int)
+            limit = request.args.get('limit', 50, type=int)
+            search = request.args.get('search', None, type=str)
+            
+            # Validate pagination
+            if skip < 0:
+                skip = 0
+            if limit < 1 or limit > 100:
+                limit = 50
+            
+            # List staff
+            staff_list, total = user_model.list_staff_accounts(
+                parent_account_id=admin_account_id,
+                skip=skip,
+                limit=limit,
+                search=search
+            )
+            
+            # Format response
+            formatted_staff = []
+            for staff in staff_list:
+                formatted_staff.append({
+                    'accountId': staff['accountId'],
+                    'username': staff['username'],
+                    'name': staff['name'],
+                    'phoneNumber': staff['phone_number'],
+                    'createdAt': staff['created_at'].isoformat() if staff.get('created_at') else None
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'staff': formatted_staff,
+                    'total': total,
+                    'skip': skip,
+                    'limit': limit
+                }
+            }), 200
+        
+        except Exception as e:
+            logger.error(f"List staff error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to list staff'}), 500
+
+    @user_bp.route('/staff/<staff_account_id>', methods=['PUT'])
+    def update_staff(staff_account_id):
+        """Update staff account"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'message': 'No data provided'}), 400
+            
+            # Extract fields
+            updates = {}
+            
+            if 'name' in data:
+                name = data['name'].strip()
+                if name and (len(name) < 2 or len(name) > 50):
+                    return jsonify({'success': False, 'message': 'Name must be between 2 and 50 characters'}), 400
+                updates['name'] = name
+            
+            if 'username' in data:
+                username = data['username'].strip()
+                if username and len(username) < 3:
+                    return jsonify({'success': False, 'message': 'Username must be at least 3 characters'}), 400
+                updates['username'] = username
+            
+            if 'phoneNumber' in data:
+                updates['phone_number'] = data['phoneNumber']
+            
+            if 'newPassword' in data:
+                password = data['newPassword']
+                if password and len(password) < 6:
+                    return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
+                updates['new_password'] = password
+            
+            # Update staff
+            updated_staff = user_model.update_staff(
+                staff_account_id=staff_account_id,
+                parent_account_id=admin_account_id,
+                **updates
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Staff account updated successfully',
+                'data': {
+                    'accountId': updated_staff['accountId'],
+                    'username': updated_staff['username'],
+                    'name': updated_staff['name'],
+                    'phoneNumber': updated_staff['phone_number']
+                }
+            }), 200
+        
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Update staff error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to update staff'}), 500
+
+    @user_bp.route('/staff/<staff_account_id>', methods=['DELETE'])
+    def delete_staff(staff_account_id):
+        """Delete a staff account"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            # Delete staff
+            user_model.delete_staff(
+                staff_account_id=staff_account_id,
+                parent_account_id=admin_account_id
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Staff account deleted successfully'
+            }), 200
+        
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Delete staff error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to delete staff'}), 500
+
+    @user_bp.route('/staff/<staff_account_id>/password', methods=['GET'])
+    def get_staff_password(staff_account_id):
+        """Get staff password with verification token"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            verification_token = request.args.get('token', '')
+            
+            if not verification_token:
+                return jsonify({'success': False, 'message': 'Verification token is required'}), 400
+            
+            # Get password
+            password_data = user_model.get_staff_password(
+                staff_account_id=staff_account_id,
+                parent_account_id=admin_account_id,
+                verification_token=verification_token
+            )
+            
+            return jsonify({
+                'success': True,
+                'data': password_data
+            }), 200
+        
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 401
+        except Exception as e:
+            logger.error(f"Get staff password error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to retrieve password'}), 500
+
+    @user_bp.route('/verify-password', methods=['POST'])
+    def verify_admin_password():
+        """Verify admin password and get session token"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'message': 'No data provided'}), 400
+            
+            password = data.get('password', '')
+            
+            if not password:
+                return jsonify({'success': False, 'message': 'Password is required'}), 400
+            
+            # Verify password
+            session_data = user_model.verify_admin_password(
+                admin_account_id=admin_account_id,
+                password=password
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Password verified successfully',
+                'data': session_data
+            }), 200
+        
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 401
+        except Exception as e:
+            logger.error(f"Verify password error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Verification failed'}), 500
+
     return user_bp

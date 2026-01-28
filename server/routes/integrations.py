@@ -17,24 +17,22 @@ def list_integrations():
     platform = request.args.get('platform')
     chatbot_id = request.args.get('chatbotId') or request.args.get('chatbot_id')
     model = IntegrationModel(current_app.mongo_client)
-    items = model.find_by_account(account_id, platform=platform, chatbot_id=chatbot_id)
-    return jsonify({'success': True, 'data': items}), 200
-
-    enriched_items = []
-    for item in items:
-        enriched = dict(item)
-        # Ensure oa_id is present
-        if 'oa_id' not in enriched:
-            enriched['oa_id'] = enriched.get('_id') or None
-        # Ensure name is present (use oa_name as fallback)
-        if not enriched.get('name') and enriched.get('oa_name'):
-            enriched['name'] = enriched.get('oa_name')
-        # Ensure avatar_url is present (use avatar as fallback)
-        if not enriched.get('avatar_url') and enriched.get('avatar'):
-            enriched['avatar_url'] = enriched.get('avatar')
-        enriched_items.append(enriched)
+    from models.user import UserModel
+    user_model = UserModel(current_app.mongo_client)
     
-    return jsonify({'success': True, 'data': enriched_items}), 200
+    # Get integrations by organization if user is staff, otherwise by account
+    user_org_id = user_model.get_user_organization_id(account_id)
+    if user_org_id:
+        # Staff: get all integrations in the organization
+        items = model.find_by_organization(user_org_id, platform=platform, chatbot_id=chatbot_id)
+        # Fallback to account-based query if no org documents found (migration period)
+        if not items:
+            items = model.find_by_account(account_id, platform=platform, chatbot_id=chatbot_id)
+    else:
+        # Admin: get own account integrations
+        items = model.find_by_account(account_id, platform=platform, chatbot_id=chatbot_id)
+    
+    return jsonify({'success': True, 'data': items}), 200
 
 @integrations_bp.route('/<integration_id>/activate', methods=['POST'])
 def activate_integration(integration_id):
@@ -42,6 +40,22 @@ def activate_integration(integration_id):
     if not account_id:
         return jsonify({'success': False, 'message': 'Account ID required'}), 400
     model = IntegrationModel(current_app.mongo_client)
+    from models.user import UserModel
+    user_model = UserModel(current_app.mongo_client)
+    
+    # Check authorization
+    existing = model.find_by_id(integration_id)
+    if not existing:
+        return jsonify({'success': False, 'message': 'Not found'}), 404
+    
+    user_org_id = user_model.get_user_organization_id(account_id)
+    if user_org_id and existing.get('organizationId') == user_org_id:
+        # Staff in same organization - allowed
+        pass
+    elif existing.get('accountId') != account_id:
+        # Not admin's integration
+        return jsonify({'success': False, 'message': 'Not authorized'}), 403
+    
     updated = model.set_active(integration_id, True)
     if not updated:
         return jsonify({'success': False, 'message': 'Not found or not authorized'}), 404
@@ -54,6 +68,22 @@ def deactivate_integration(integration_id):
     if not account_id:
         return jsonify({'success': False, 'message': 'Account ID required'}), 400
     model = IntegrationModel(current_app.mongo_client)
+    from models.user import UserModel
+    user_model = UserModel(current_app.mongo_client)
+    
+    # Check authorization
+    existing = model.find_by_id(integration_id)
+    if not existing:
+        return jsonify({'success': False, 'message': 'Not found'}), 404
+    
+    user_org_id = user_model.get_user_organization_id(account_id)
+    if user_org_id and existing.get('organizationId') == user_org_id:
+        # Staff in same organization - allowed
+        pass
+    elif existing.get('accountId') != account_id:
+        # Not admin's integration
+        return jsonify({'success': False, 'message': 'Not authorized'}), 403
+    
     updated = model.set_active(integration_id, False)
     if not updated:
         return jsonify({'success': False, 'message': 'Not found or not authorized'}), 404
@@ -66,12 +96,21 @@ def delete_integration(integration_id):
     if not account_id:
         return jsonify({'success': False, 'message': 'Account ID required'}), 400
     model = IntegrationModel(current_app.mongo_client)
+    from models.user import UserModel
+    user_model = UserModel(current_app.mongo_client)
 
-    # ensure the integration exists and belongs to requester
+    # ensure the integration exists and belongs to requester's organization
     existing = model.find_by_id(integration_id)
     if not existing:
         return jsonify({'success': False, 'message': 'Not found'}), 404
-    if existing.get('accountId') != account_id:
+    
+    # Check organization access or account access as fallback
+    user_org_id = user_model.get_user_organization_id(account_id)
+    if user_org_id and existing.get('organizationId') == user_org_id:
+        # Staff can delete if in same organization
+        pass
+    elif existing.get('accountId') != account_id:
+        # Admin's own integration
         return jsonify({'success': False, 'message': 'Not authorized'}), 403
 
     deleted = model.delete_integration(integration_id)
@@ -106,27 +145,45 @@ def get_all_conversations():
         from models.conversation import ConversationModel
         from models.chatbot import ChatbotModel
         from models.integration import IntegrationModel
+        from models.user import UserModel
         
         conversation_model = ConversationModel(current_app.mongo_client)
         chatbot_model = ChatbotModel(current_app.mongo_client)
         integration_model = IntegrationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
         
-        # Get all chatbots for this account
-        account_chatbots = chatbot_model.list_chatbots_by_account(account_id)
+        # Get organization context for staff access to admin's chatbots
+        user_org_id = user_model.get_user_organization_id(account_id)
+        
+        # Get all chatbots for organization (or account as fallback)
+        if user_org_id:
+            account_chatbots = chatbot_model.list_chatbots_by_organization(user_org_id)
+            logger.info(f"Found {len(account_chatbots)} chatbots for organization {user_org_id}")
+            # Fallback to account-based query if no org chatbots found (migration period)
+            if not account_chatbots:
+                account_chatbots = chatbot_model.list_chatbots_by_account(account_id)
+                logger.info(f"Fallback: Found {len(account_chatbots)} chatbots for account {account_id}")
+        else:
+            account_chatbots = chatbot_model.list_chatbots_by_account(account_id)
+            logger.info(f"Found {len(account_chatbots)} chatbots for account {account_id}")
+        
         chatbot_ids = [bot.get('id') for bot in account_chatbots if bot.get('id')]
-        
-        logger.info(f"Found {len(chatbot_ids)} chatbots for account {account_id}")
         
         if not chatbot_ids:
             return jsonify({'success': True, 'data': []}), 200
         
-        # Get conversations for this account's chatbots only
+        # Get conversations for this organization's chatbots
         enriched_conversations = []
         for chatbot in account_chatbots:
             chatbot_id = chatbot.get('id')
-            # SECURITY FIX: Pass account_id to ensure account isolation
-            conversations = [conversation_model._serialize(conv, current_user_id=account_id) 
-                           for conv in conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, account_id=account_id)]
+            # Get conversations using organizationId for org-level isolation
+            if user_org_id:
+                conversations = conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, organization_id=user_org_id)
+                # Fallback to account-based query if no org conversations found (migration period)
+                if not conversations:
+                    conversations = conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, account_id=account_id)
+            else:
+                conversations = conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, account_id=account_id)
             
             for conv in conversations:
                 oa_id = conv.get('oa_id')
@@ -147,13 +204,20 @@ def get_all_conversations():
                     potential_integration = integration_model.find_by_platform_and_oa(p, oa_id)
                     
                     if potential_integration:
-                        # Validate that this integration:
-                        # 1. Belongs to the current account
-                        # 2. Is active
-                        is_owner = str(potential_integration.get('accountId')) == str(account_id)
+                        # Validate that this integration is accessible to the requester:
+                        # - Admin (account owner) can access integrations with matching accountId
+                        # - Staff can access integrations that belong to the same organization
+                        is_owner = (str(potential_integration.get('accountId')) == str(account_id))
+                        is_org_member = False
+                        if user_org_id and potential_integration.get('organizationId'):
+                            try:
+                                is_org_member = str(potential_integration.get('organizationId')) == str(user_org_id)
+                            except Exception:
+                                is_org_member = False
                         is_active = potential_integration.get('is_active', True)
-                        
-                        if is_owner and is_active:
+
+                        # Allow if requester is account owner or org member, and integration is active
+                        if (is_owner or is_org_member) and is_active:
                             integration = potential_integration
                             platform = p  # Correct platform if needed
                             break
@@ -209,15 +273,21 @@ def update_conversation_nickname():
 
     try:
         from models.conversation import ConversationModel
-        model = ConversationModel(current_app.mongo_client)
+        from models.user import UserModel
+        conv_model = ConversationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
         
-        # SECURITY FIX: Include account_id when updating nickname
-        updated_conv = model.update_nickname(
+        # Get organization context
+        user_org_id = user_model.get_user_organization_id(account_id)
+        
+        # Update nickname with organization context for staff access
+        updated_conv = conv_model.update_nickname(
             oa_id=oa_id, 
             customer_id=customer_id, 
             user_id=account_id, 
             nick_name=nick_name,
-            account_id=account_id,  # SECURITY FIX: Account isolation
+            account_id=account_id,
+            organization_id=user_org_id  # Allow staff to update in shared organization
         )
 
         if not updated_conv:
@@ -225,7 +295,7 @@ def update_conversation_nickname():
 
         return jsonify({
             'success': True, 
-            'data': model._serialize(updated_conv, current_user_id=account_id)
+            'data': conv_model._serialize(updated_conv)
         }), 200
 
     except Exception as e:

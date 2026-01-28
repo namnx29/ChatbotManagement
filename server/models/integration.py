@@ -16,6 +16,11 @@ class IntegrationModel:
         self.collection.create_index([('platform', 1), ('oa_id', 1)], unique=True)
         self.collection.create_index('expires_at')
 
+        # NEW: Indexes for organizationId-based queries
+        self.collection.create_index([('organizationId', 1)])
+        self.collection.create_index([('organizationId', 1), ('platform', 1), ('oa_id', 1)])
+        self.collection.create_index([('organizationId', 1), ('chatbotId', 1), ('platform', 1)])
+
     def _serialize(self, doc):
         if not doc:
             return None
@@ -40,7 +45,7 @@ class IntegrationModel:
                 pass
         return out
 
-    def create_or_update(self, account_id, platform, oa_id, access_token, refresh_token=None, expires_in=None, meta=None, is_active=True, name=None, avatar_url=None, chatbot_id=None):
+    def create_or_update(self, account_id, platform, oa_id, access_token, refresh_token=None, expires_in=None, meta=None, is_active=True, name=None, avatar_url=None, chatbot_id=None, organization_id=None):
         expires_at = None
         if expires_in:
             expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
@@ -61,6 +66,10 @@ class IntegrationModel:
             'chatbotId': chatbot_id,
             'updated_at': now,
         }
+
+        if organization_id:
+            doc['organizationId'] = organization_id
+
         # On insert, set created_at and connected_at
         self.collection.update_one(
             {'platform': platform, 'oa_id': oa_id},
@@ -142,15 +151,17 @@ class IntegrationModel:
         res = self.collection.find_one_and_update({'_id': ObjectId(integration_id)}, {'$set': update}, return_document=True)
         return self._serialize(res)
 
-    def update_profile(self, integration_id, name=None, avatar_url=None, meta=None):
-        """Update the profile fields (name, avatar, meta) for an integration."""
-        update = {'updated_at': datetime.utcnow()}
-        if name is not None:
-            update['name'] = name
-            update['oa_name'] = name
-        if avatar_url is not None:
-            update['avatar_url'] = avatar_url
-        if meta is not None:
-            update['meta'] = meta
-        res = self.collection.find_one_and_update({'_id': ObjectId(integration_id)}, {'$set': update}, return_document=True)
-        return self._serialize(res)
+    def find_by_organization(self, organization_id, platform=None, chatbot_id=None):
+        """Find integrations by organization
+        
+        NEW: Query integrations using organizationId for org-level isolation.
+        """
+        if not organization_id:
+            return []
+        query = {'organizationId': organization_id}
+        if platform:
+            query['platform'] = platform
+        if chatbot_id is not None:
+            query['chatbotId'] = chatbot_id
+        docs = list(self.collection.find(query))
+        return [self._serialize(d) for d in docs]

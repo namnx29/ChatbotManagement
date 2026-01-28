@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from pydoc import doc
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
@@ -22,7 +23,11 @@ class MessageModel:
 
         self.collection.create_index([('accountId', 1), ('platform', 1), ('oa_id', 1), ('created_at', -1)])
         self.collection.create_index([('accountId', 1), ('conversation_id', 1), ('created_at', -1)])
-
+        
+        # NEW: Indexes for organizationId-based queries
+        self.collection.create_index([('organizationId', 1), ('conversation_id', 1), ('created_at', -1)])
+        self.collection.create_index([('organizationId', 1), ('platform', 1), ('oa_id', 1), ('created_at', -1)])
+        self.collection.create_index([('organizationId', 1), ('created_at', -1)])
 
     def _serialize(self, doc):
         """Return a fully JSON-serializable representation of a message document.
@@ -68,7 +73,7 @@ class MessageModel:
 
         return out
 
-    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None):
+    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None, organization_id=None):
         """
         Add a message. 
         - conversation_id: Optional ObjectId string of conversation. If provided, this is the new way.
@@ -92,6 +97,9 @@ class MessageModel:
         if account_id:
             doc['accountId'] = account_id
 
+        if organization_id:
+            doc['organizationId'] = organization_id
+            
         # Add conversation_id if provided (new structure)
         # SECURITY FIX: Ensure conversation_id is always properly stored
         if conversation_id:
@@ -239,3 +247,64 @@ class MessageModel:
                 'sender_profile': sp,
             })
         return out
+
+    def get_by_organization_and_conversation(self, organization_id, conversation_id, limit=50, skip=0):
+        """Get messages by organization and conversation ID
+        
+        NEW: Query messages using organizationId for org-level isolation.
+        """
+        if not organization_id or not conversation_id:
+            return []
+        
+        try:
+            if isinstance(conversation_id, ObjectId):
+                conv_id_obj = conversation_id
+            else:
+                conv_id_obj = ObjectId(conversation_id)
+        except Exception as e:
+            logger.error(f"Failed to convert conversation_id '{conversation_id}' to ObjectId: {e}")
+            return []
+        
+        query = {'organizationId': organization_id, 'conversation_id': conv_id_obj}
+        try:
+            limit = max(int(limit), 0)
+        except Exception:
+            limit = 50
+        try:
+            skip = max(int(skip), 0)
+        except Exception:
+            skip = 0
+        
+        cursor = self.collection.find(query).sort('created_at', -1).skip(skip).limit(limit)
+        docs = [self._serialize(d) for d in list(cursor)]
+        docs.reverse()
+        return docs
+
+    def mark_as_read_by_organization(self, organization_id, conversation_id):
+        """Mark messages as read by organization
+        
+        NEW: Mark read using organizationId for org-level isolation.
+        """
+        if not organization_id or not conversation_id:
+            return 0
+        
+        try:
+            if isinstance(conversation_id, ObjectId):
+                conv_id_obj = conversation_id
+            else:
+                conv_id_obj = ObjectId(conversation_id)
+        except Exception as e:
+            logger.error(f"Failed to convert conversation_id '{conversation_id}' to ObjectId: {e}")
+            return 0
+        
+        query = {
+            'organizationId': organization_id,
+            'conversation_id': conv_id_obj,
+            'direction': 'in',
+            'is_read': False
+        }
+        result = self.collection.update_many(
+            query,
+            {'$set': {'is_read': True, 'updated_at': datetime.utcnow()}}
+        )
+        return result.modified_count

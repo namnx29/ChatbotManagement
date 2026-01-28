@@ -142,6 +142,17 @@ def create_app(env=None):
             if account_id:
                 room = f"account:{account_id}"
                 join_room(room)
+                # Also try to join the organization's room so staff users receive org-level events
+                try:
+                    user_model = UserModel(mongo_client)
+                    org_id = user_model.get_user_organization_id(account_id)
+                    if org_id:
+                        org_room = f"organization:{org_id}"
+                        join_room(org_room)
+                        logger.info(f"✅ User {account_id} also joined organization room {org_room}")
+                except Exception as e:
+                    logger.debug(f"Could not join organization room for account {account_id}: {e}")
+
                 logger.info(f"✅ User {account_id} connected and joined room {room}")
                 return True  # Allow connection
             else:

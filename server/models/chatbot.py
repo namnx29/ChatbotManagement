@@ -13,8 +13,9 @@ class ChatbotModel:
 
     def _create_indexes(self):
         self.collection.create_index('accountId')
+        self.collection.create_index('organizationId')
 
-    def create_chatbot(self, account_id, name, purpose=None, greeting=None, fields=None, avatar_url=None):
+    def create_chatbot(self, account_id, name, purpose=None, greeting=None, fields=None, avatar_url=None, organization_id=None):
         """Create a new chatbot document"""
         now = datetime.utcnow()
         bot = {
@@ -27,6 +28,9 @@ class ChatbotModel:
             'created_at': now,
             'updated_at': now,
         }
+
+        if organization_id:
+            bot['organizationId'] = organization_id
 
         result = self.collection.insert_one(bot)
         bot['_id'] = result.inserted_id
@@ -116,3 +120,28 @@ class ChatbotModel:
 
         result['id'] = str(result.get('_id'))
         return result
+
+
+    def list_chatbots_by_organization(self, organization_id):
+        """Return list of chatbots for an organization ordered by updated_at desc
+        
+        NEW: Query chatbots using organizationId for org-level isolation.
+        """
+        if not organization_id:
+            return []
+        cursor = self.collection.find({'organizationId': organization_id}).sort('updated_at', -1)
+        bots = []
+        for b in cursor:
+            b['id'] = str(b.get('_id'))
+            # keep only useful fields
+            bots.append({
+                'id': b['id'],
+                'name': b.get('name'),
+                'avatar_url': b.get('avatar_url'),
+                'purpose': b.get('purpose'),
+                'greeting': b.get('greeting'),
+                'fields': b.get('fields', []),
+                'created_at': b.get('created_at'),
+                'updated_at': b.get('updated_at'),
+            })
+        return bots

@@ -31,10 +31,19 @@ def get_account_id_from_request():
         account_id = data.get('accountId')
     return account_id
 
+def get_organization_id_from_request(user_model):
+    """Get organization_id from user model using account_id"""
+    account_id = get_account_id_from_request()
+    if account_id and user_model:
+        return user_model.get_user_organization_id(account_id)
+    return None
+
 
 def init_chatbot_routes(mongo_client):
     chatbot_model = ChatbotModel(mongo_client)
     training_model = TrainingModel(mongo_client)
+    from models.user import UserModel
+    user_model = UserModel(mongo_client)
 
     # Ensure upload folder exists
     os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
@@ -69,7 +78,9 @@ def init_chatbot_routes(mongo_client):
             if not name:
                 return jsonify({'success': False, 'message': 'Chatbot name is required'}), 400
 
-            bot = chatbot_model.create_chatbot(account_id, name, purpose, greeting, fields, avatar_url)
+            organization_id = get_organization_id_from_request(user_model)
+            
+            bot = chatbot_model.create_chatbot(account_id, name, purpose, greeting, fields, avatar_url, organization_id=organization_id)
             # Format response
             bot_resp = {
                 'id': str(bot.get('_id')),

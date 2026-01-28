@@ -27,6 +27,14 @@ Welcome to the Preny Full-Stack Authentication System! This document serves as a
    - Configuration guide
    - Troubleshooting
 
+### For Staff Management Feature (NEW)
+4. **[STAFF_MANAGEMENT_DOCUMENTATION_INDEX.md](./STAFF_MANAGEMENT_DOCUMENTATION_INDEX.md)** - Staff management feature docs
+   - Quick reference
+   - Complete implementation plan
+   - Architecture & data flow
+   - Step-by-step checklist
+   - API specifications
+
 ---
 
 ## 📚 Detailed Documentation
@@ -61,6 +69,12 @@ Welcome to the Preny Full-Stack Authentication System! This document serves as a
 | **IMPLEMENTATION_SUMMARY.md** | Project overview | Managers, Leads | 15 min |
 | **docs/Work.md** | Implementation plan | Developers, Architects | 30 min |
 | **CHECKLIST.md** | Setup & deployment checklist | DevOps, Developers | 20 min |
+| **STAFF_MANAGEMENT_DOCUMENTATION_INDEX.md** | Staff management docs | All | 5 min |
+| **STAFF_MANAGEMENT_QUICK_REFERENCE.md** | Staff feature quick ref | Developers | 5 min |
+| **STAFF_MANAGEMENT_SUMMARY.md** | Staff feature overview | Everyone | 15 min |
+| **STAFF_MANAGEMENT_IMPLEMENTATION_PLAN.md** | Staff implementation spec | Developers | 60 min |
+| **STAFF_MANAGEMENT_ARCHITECTURE.md** | Staff system design | Architects, Devs | 40 min |
+| **STAFF_MANAGEMENT_CHECKLIST.md** | Staff implementation checklist | Developers | 50 min |
 | **This file** | Documentation index | Everyone | 5 min |
 
 ---

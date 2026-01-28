@@ -47,7 +47,7 @@ def init_auth_routes(mongo_client):
                 return jsonify({'success': False, 'message': 'Invalid email format'}), 400
             
             # Create user with name and phone
-            user = user_model.create_user(email, password, name, phone)
+            user = user_model.create_user(email, password, name, phone, role='admin')
             
             # Create default test chatbot for this user
             try:
@@ -84,35 +84,42 @@ def init_auth_routes(mongo_client):
     
     @auth_bp.route('/login', methods=['POST'])
     def login():
-        """Login user"""
+        """Login user (supports both email for admins and username for staff)"""
         try:
             data = request.get_json()
             
             if not data:
                 return jsonify({'success': False, 'message': 'No data provided'}), 400
             
-            email = data.get('email', '').strip()
+            # Accept either email or username
+            email_or_username = data.get('email', '').strip() or data.get('username', '').strip()
             password = data.get('password', '')
             
-            if not email or not password:
-                return jsonify({'success': False, 'message': 'Email and password are required'}), 400
+            if not email_or_username or not password:
+                return jsonify({'success': False, 'message': 'Email/username and password are required'}), 400
             
-            # Find user
-            user = user_model.find_by_email(email)
+            # Try to find user by email first (admin users)
+            user = user_model.find_by_email(email_or_username)
+            
+            # If not found by email, try to find by username (staff users)
+            if not user:
+                # For username, we need parent_account_id from the request
+                parent_account_id = data.get('parentAccountId', '')
+                if parent_account_id:
+                    user = user_model.find_by_username(email_or_username, parent_account_id)
             
             if not user:
-                return jsonify({'success': False, 'message': 'Invalid email or password'}), 401
+                return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
             
             # Verify password
             if not user_model.verify_password(user, password):
-                return jsonify({'success': False, 'message': 'Invalid email or password'}), 401
+                return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
             
-            # Check if email is verified
-            if not user.get('is_verified', False):
+            # Check if email is verified (for admin users only)
+            if user.get('role') == 'admin' and not user.get('is_verified', False):
                 return jsonify({
                     'success': False,
-                    # 'message': 'Email not verified. Please check your email for verification link.',
-                    'email': email,
+                    'email': user.get('email'),
                     'code': 'UNVERIFIED',
                 }), 403
 
@@ -132,9 +139,12 @@ def init_auth_routes(mongo_client):
                 'success': True,
                 'message': 'Login successful',
                 'user': {
-                    'email': user['email'],
+                    'email': user.get('email'),
+                    'username': user.get('username'),
                     'accountId': user['accountId'],
-                    'name': user.get('name', user['email'].split('@')[0])
+                    'name': user.get('name', user.get('email', '').split('@')[0] if user.get('email') else ''),
+                    'role': user.get('role', 'admin'),
+                    'parentAccountId': user.get('parent_account_id')
                 },
                 'session_expires_at': session_expires_at
             }), 200

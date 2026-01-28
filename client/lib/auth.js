@@ -10,13 +10,20 @@ export function isAuthenticatedClient() {
   return Boolean(userEmail && accountId);
 }
 
+export function getUserRole() {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("userRole") || "admin";
+}
+
 export function usePublicPageGuard(redirectTo = "/dashboard") {
   const router = useRouter();
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
     if (isAuthenticatedClient()) {
-      router.replace(redirectTo);
+      const role = getUserRole();
+      const finalRedirect = role === "staff" ? "/dashboard/messages" : redirectTo;
+      router.replace(finalRedirect);
     } else {
       setIsChecking(false);
     }

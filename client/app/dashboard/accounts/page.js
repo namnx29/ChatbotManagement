@@ -53,6 +53,7 @@ export default function MembersPermissionsPage() {
 			if (result.success) {
 				const formatted = result.data.staff.map((staff) => ({
 					id: staff.accountId,
+					avatar: staff.avatarUrl,
 					accountId: staff.accountId,
 					name: staff.name,
 					username: staff.username,
@@ -154,8 +155,8 @@ export default function MembersPermissionsPage() {
 			align: 'center',
 		},
 		{
-			title: 'Hành động',
-			key: 'action',
+			title: 'Mật khẩu',
+			key: 'password',
 			align: 'center',
 			render: (_, record) => (
 				<Space>
@@ -170,6 +171,15 @@ export default function MembersPermissionsPage() {
 						}}
 						title="View password"
 					/>
+				</Space>
+			)
+		},
+		{
+			title: 'Hành động',
+			key: 'action',
+			align: 'center',
+			render: (_, record) => (
+				<Space>
 					<Button
 						type="default"
 						size="small"

@@ -23,15 +23,22 @@ export default function LoginPage() {
   const onFinish = async (values) => {
     setLoading(true);
     try {
-      const result = await loginUser(values.email, values.password);
+      const result = await loginUser(values.emailOrUsername, values.password);
 
       if (result.success) {
         message.success("Đăng nhập thành công");
-        localStorage.setItem('userEmail', result.user.email);
+        localStorage.setItem('userEmail', result.user.email || result.user.username);
         localStorage.setItem('accountId', result.user.accountId);
-        localStorage.setItem('userName', result.user.name || result.user.email.split('@')[0]);
+        localStorage.setItem('userName', result.user.name || result.user.username || result.user.email.split('@')[0]);
+        localStorage.setItem('userRole', result.user.role || 'admin');
+        localStorage.setItem('parentAccountId', result.user.parentAccountId || '');
 
-        router.push('/dashboard/profile');
+        // Redirect based on user role
+        if (result.user.role === 'staff') {
+          router.push('/dashboard/messages');
+        } else {
+          router.push('/dashboard/profile');
+        }
       }
     } catch (error) {
       if (error.info?.code === 'UNVERIFIED') {
@@ -91,19 +98,18 @@ export default function LoginPage() {
           <Form.Item
             label={
               <span style={{ fontSize: "14px" }}>
-                Email <span style={{ color: "red" }}>*</span>
+                Email/Tên đăng nhập <span style={{ color: "red" }}>*</span>
               </span>
             }
-            name="email"
+            name="emailOrUsername"
             rules={[
-              { required: true, message: "Vui lòng nhập email!" },
-              { type: "email", message: "Email không hợp lệ!" },
+              { required: true, message: "Vui lòng nhập email hoặc tên đăng nhập!" },
             ]}
           >
             <Input
-              placeholder="Nhập Email của bạn"
+              placeholder="Nhập email hoặc tên đăng nhập của bạn"
               size="large"
-              maxLength={50}
+              maxLength={100}
               showCount
               style={{ fontSize: "14px" }}
             />

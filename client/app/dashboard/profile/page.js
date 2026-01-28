@@ -67,6 +67,7 @@ export default function ProfilePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [nameModalVisible, setNameModalVisible] = useState(false);
+  const [role, setRole] = useState("");
 
   const fileInputRef = useRef(null);
 
@@ -76,8 +77,9 @@ export default function ProfilePage() {
       const storedUserEmail = localStorage.getItem("userEmail");
       const accountId = localStorage.getItem("accountId");
       const storedUserName = localStorage.getItem("userName");
+      const role = localStorage.getItem("userRole");
 
-      if (!storedUserEmail || !accountId) {
+      if (!accountId) {
         router.push("/login");
         return;
       }
@@ -85,8 +87,8 @@ export default function ProfilePage() {
       setUserId(accountId);
       setUserName(storedUserName || storedUserEmail.split("@")[0]);
       setUserEmail(storedUserEmail);
+      setRole(role || "admin");
 
-      // Fetch profile data from backend
       try {
         const result = await fetchProfile(accountId);
         if (result.success && result.data) {
@@ -363,7 +365,9 @@ export default function ProfilePage() {
               }
             />
 
-            <DetailRow label="E-mail" value={userEmail} />
+            <DetailRow label={role ===
+              "staff" ? "Username" : "Email"
+            } value={userEmail} />
 
             <DetailRow
               label="Số điện thoại"

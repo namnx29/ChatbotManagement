@@ -6,12 +6,14 @@ import { useState, useEffect } from 'react';
 import { useRouter } from "next/navigation";
 import { fetchProfile, getAvatarUrl } from "@/lib/api";
 import dayjs from 'dayjs';
+import CreateStaffModal from '@/lib/components/popup/CreateStaffModal';
 
 export default function MembersPermissionsPage() {
 	const { message } = App.useApp();
 	const router = useRouter();
 	const [isLoading, setIsLoading] = useState(true);
 	const [members, setMembers] = useState([]);
+	const [isModalOpen, setIsModalOpen] = useState(false);
 
 	useEffect(() => {
 		const checkAuth = async () => {
@@ -139,7 +141,7 @@ export default function MembersPermissionsPage() {
 							fontWeight: '500',
 						}}
 					>
-						1
+						0/5
 					</div>
 					<Button
 						type="primary"
@@ -151,6 +153,7 @@ export default function MembersPermissionsPage() {
 							alignItems: 'center',
 							gap: '8px',
 						}}
+						onClick={() => setIsModalOpen(true)}
 					>
 						Thêm thành viên
 					</Button>
@@ -173,6 +176,11 @@ export default function MembersPermissionsPage() {
 					}}
 				/>
 			</div>
+
+			<CreateStaffModal
+				open={isModalOpen}
+				onClose={() => setIsModalOpen(false)}
+			/>
 		</div>
 	);
 }

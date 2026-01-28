@@ -6,11 +6,10 @@ import {
   Row,
   Col,
   Tag,
-  Select,
   App,
   Spin,
 } from "antd";
-import { EditOutlined, DownOutlined } from "@ant-design/icons";
+import { EditOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
 import { fetchProfile, uploadAvatar, getAvatarUrl } from "@/lib/api";
@@ -391,18 +390,6 @@ export default function ProfilePage() {
                 <a href="#" style={{ color: "#6c3fb5" }}>
                   Chỉnh sửa
                 </a>
-              }
-            />
-
-            <DetailRow
-              label="Thiết lập múi giờ"
-              value={
-                <>
-                  <Select
-                    defaultValue="GMT+07:00 - Vietnam"
-                    suffixIcon={<DownOutlined />}
-                  />
-                </>
               }
             />
           </div>

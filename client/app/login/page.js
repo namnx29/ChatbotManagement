@@ -31,7 +31,7 @@ export default function LoginPage() {
         localStorage.setItem('accountId', result.user.accountId);
         localStorage.setItem('userName', result.user.name || result.user.email.split('@')[0]);
 
-        router.push('/dashboard');
+        router.push('/dashboard/profile');
       }
     } catch (error) {
       if (error.info?.code === 'UNVERIFIED') {

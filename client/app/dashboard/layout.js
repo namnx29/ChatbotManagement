@@ -9,7 +9,8 @@ import {
   Progress,
   Badge,
   Spin,
-  Typography
+  Typography,
+  App
 } from "antd";
 import {
   UserOutlined,
@@ -42,6 +43,7 @@ const MOBILE_BREAKPOINT = 768;
 
 function DashboardLayoutContent({ children }) {
   const { hasUnread } = useNotification();
+  const { message } = App.useApp();
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
@@ -49,6 +51,7 @@ function DashboardLayoutContent({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [userName, setUserName] = useState("");
   const [userAvatar, setUserAvatar] = useState(null);
+  const [userRole, setUserRole] = useState("admin");
   const siderWidth = 240;
   const collapsedWidth = 50;
 
@@ -58,11 +61,24 @@ function DashboardLayoutContent({ children }) {
       const userEmail = localStorage.getItem("userEmail");
       const accountId = localStorage.getItem("accountId");
       const storedUserName = localStorage.getItem("userName");
+      const storedUserRole = localStorage.getItem("userRole") || "admin";
 
       if (!userEmail || !accountId) {
         // User not authenticated, redirect to login
         router.push("/login");
         return;
+      }
+
+      // Check if staff is accessing allowed routes
+      if (storedUserRole === "staff") {
+        const allowedStaffRoutes = ["/dashboard/messages", "/dashboard/profile"];
+        const isAllowedRoute = allowedStaffRoutes.some(route => pathname.startsWith(route));
+        
+        if (!isAllowedRoute) {
+          // Redirect staff to messages page
+          router.push("/dashboard/messages");
+          return;
+        }
       }
 
       try {
@@ -71,17 +87,17 @@ function DashboardLayoutContent({ children }) {
           setUserAvatar(result.data.avatar_url || null);
         }
       } catch (error) {
-        console.error("Failed to fetch profile:", error);
         message.error("Failed to load profile data");
       }
 
+      setUserRole(storedUserRole);
       setUserName(storedUserName || userEmail.split("@")[0]);
       setIsAuthenticated(true);
       setIsLoading(false);
     };
 
     checkAuth();
-  }, [router]);
+  }, [router, pathname]);
 
   // Listen for avatar updates from profile page
   useEffect(() => {
@@ -267,11 +283,50 @@ function DashboardLayoutContent({ children }) {
     },
   ];
 
+  // Filter menu items based on user role
+  const getFilteredMenuItems = () => {
+    if (userRole === "staff") {
+      // Staff can only see profile and messages
+      return [
+        {
+          key: "/dashboard/profile",
+          icon: <UserOutlined />,
+          label: <Link href="/dashboard/profile">Thông tin cá nhân</Link>,
+        },
+        {
+          key: "/dashboard/messages",
+          icon: <MessageOutlined />,
+          label: (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <Link href="/dashboard/messages" style={{ flex: 1 }}>Quản lý tin nhắn</Link>
+              {hasUnread && (
+                <div
+                  style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: '#ff4d4f',
+                    marginLeft: '8px',
+                  }}
+                />
+              )}
+            </div>
+          ),
+        },
+      ];
+    }
+    // Admin sees all items
+    return allMenuItems;
+  };
+
   const handleLogout = () => {
     // Clear auth data from localStorage
     localStorage.removeItem("userEmail");
     localStorage.removeItem("accountId");
     localStorage.removeItem("userName");
+    localStorage.removeItem("userRole");
+    localStorage.removeItem("parentAccountId");
+    localStorage.removeItem("userAvatar");
 
     // Redirect to login
     router.push("/login");
@@ -516,7 +571,7 @@ function DashboardLayoutContent({ children }) {
                   border: "none",
                   background: "transparent",
                 }}
-                items={allMenuItems}
+                items={getFilteredMenuItems()}
               />
             </div>
 

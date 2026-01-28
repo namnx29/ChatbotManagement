@@ -116,13 +116,13 @@ export async function registerUser(email, password, confirmPassword, fullName, p
 
 /**
  * Login user
- * @param {string} email - User email
+ * @param {string} emailOrUsername - User email or username
  * @param {string} password - User password
  * @returns {Promise<object>} - Login response with user data
  */
-export async function loginUser(email, password) {
+export async function loginUser(emailOrUsername, password) {
   return apiCall('POST', '/login', {
-    email,
+    email: emailOrUsername,
     password,
   });
 }

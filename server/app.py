@@ -48,6 +48,7 @@ def create_app(env=None):
         raise
     
     # Setup CORS (allow credentials for session cookies)
+    CORS(app, resources={r"/api/*": {"origins": ["https://elcom.vn", "http://103.7.40.236:3002"]}}, supports_credentials=True)
     CORS(app, origins=app.config['CORS_ORIGINS'], supports_credentials=True)
 
     # Setup Flask-Login
@@ -152,7 +153,6 @@ def create_app(env=None):
                         logger.info(f"✅ User {account_id} also joined organization room {org_room}")
                 except Exception as e:
                     logger.debug(f"Could not join organization room for account {account_id}: {e}")
-
                 logger.info(f"✅ User {account_id} connected and joined room {room}")
                 return True  # Allow connection
             else:
@@ -163,6 +163,151 @@ def create_app(env=None):
         except Exception as e:
             logger.error(f"Error in WebSocket connect handler: {e}", exc_info=True)
             return False  # Reject connection on error
+
+    # Socket event handlers for conversation locking
+    @app.socketio.on('start-typing')
+    def socket_start_typing(data):
+        try:
+            from models.user import UserModel
+            from models.conversation import ConversationModel
+            account_id = data.get('account_id') or data.get('accountId')
+            conv_id = data.get('conv_id') or data.get('convId')
+            ttl = int(data.get('ttl_seconds') or data.get('ttl') or 300)
+            if not account_id or not conv_id:
+                return
+            user_model = UserModel(app.mongo_client)
+            user = user_model.find_by_account_id(account_id)
+            if not user:
+                return
+            # Only staff/admin can lock
+            if user.get('role') not in ('admin', 'staff'):
+                return
+            user_org = user_model.get_user_organization_id(account_id)
+            conv_model = ConversationModel(app.mongo_client)
+            parts = conv_id.split(':')
+            if len(parts) != 3:
+                return
+            platform, oa_id, sender_id = parts
+            customer_id = f"{platform}:{sender_id}"
+            conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org, account_id=account_id)
+            if not conv:
+                return
+            # Try to lock
+            name = user.get('name') or user.get('username')
+            updated = conv_model.lock_by_id(conv.get('_id'), account_id, name, ttl_seconds=ttl)
+            if not updated:
+                # already locked by someone else -> notify requester
+                socketio = getattr(app, 'socketio', None)
+                if socketio:
+                    socketio.emit('lock-failed', {'conv_id': conv_id, 'current_handler': conv.get('current_handler')}, room=f"account:{account_id}")
+                return
+            # Broadcast lock event to org room
+            socketio = getattr(app, 'socketio', None)
+            if socketio and user_org:
+                payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id'), 'handler': updated.get('current_handler'), 'lock_expires_at': updated.get('lock_expires_at')}
+                socketio.emit('conversation-locked', payload, room=f"organization:{user_org}")
+        except Exception as e:
+            logger.error(f"Error in socket start-typing handler: {e}")
+
+    @app.socketio.on('stop-typing')
+    def socket_stop_typing(data):
+        try:
+            from models.user import UserModel
+            from models.conversation import ConversationModel
+            account_id = data.get('account_id') or data.get('accountId')
+            conv_id = data.get('conv_id') or data.get('convId')
+            if not account_id or not conv_id:
+                return
+            user_model = UserModel(app.mongo_client)
+            user = user_model.find_by_account_id(account_id)
+            if not user:
+                return
+            user_org = user_model.get_user_organization_id(account_id)
+            conv_model = ConversationModel(app.mongo_client)
+            parts = conv_id.split(':')
+            if len(parts) != 3:
+                return
+            platform, oa_id, sender_id = parts
+            customer_id = f"{platform}:{sender_id}"
+            conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org, account_id=account_id)
+            if not conv:
+                return
+            updated = conv_model.unlock_by_id(conv.get('_id'), requester_account_id=account_id, force=False)
+            if not updated:
+                return
+            # Broadcast unlock event
+            socketio = getattr(app, 'socketio', None)
+            if socketio and user_org:
+                payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id')}
+                socketio.emit('conversation-unlocked', payload, room=f"organization:{user_org}")
+        except Exception as e:
+            logger.error(f"Error in socket stop-typing handler: {e}")
+
+    @app.socketio.on('complete-conversation')
+    def socket_complete_conversation(data):
+        try:
+            # Complete means unlock and mark complete
+            from models.user import UserModel
+            from models.conversation import ConversationModel
+            account_id = data.get('account_id') or data.get('accountId')
+            conv_id = data.get('conv_id') or data.get('convId')
+            if not account_id or not conv_id:
+                return
+            user_model = UserModel(app.mongo_client)
+            user = user_model.find_by_account_id(account_id)
+            if not user:
+                return
+            user_org = user_model.get_user_organization_id(account_id)
+            conv_model = ConversationModel(app.mongo_client)
+            parts = conv_id.split(':')
+            if len(parts) != 3:
+                return
+            platform, oa_id, sender_id = parts
+            customer_id = f"{platform}:{sender_id}"
+            conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org, account_id=account_id)
+            if not conv:
+                return
+            updated = conv_model.unlock_by_id(conv.get('_id'), requester_account_id=account_id, force=(user.get('role')=='admin'))
+            if not updated:
+                return
+            socketio = getattr(app, 'socketio', None)
+            if socketio and user_org:
+                payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id')}
+                socketio.emit('conversation-unlocked', payload, room=f"organization:{user_org}")
+        except Exception as e:
+            logger.error(f"Error in complete-conversation handler: {e}")
+
+    @app.socketio.on('request-access')
+    def socket_request_access(data):
+        try:
+            from models.user import UserModel
+            from models.conversation import ConversationModel
+            account_id = data.get('account_id') or data.get('accountId')
+            conv_id = data.get('conv_id') or data.get('convId')
+            if not account_id or not conv_id:
+                return
+            user_model = UserModel(app.mongo_client)
+            user_org = user_model.get_user_organization_id(account_id)
+            conv_model = ConversationModel(app.mongo_client)
+            parts = conv_id.split(':')
+            if len(parts) != 3:
+                return
+            platform, oa_id, sender_id = parts
+            customer_id = f"{platform}:{sender_id}"
+            conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org, account_id=account_id)
+            if not conv:
+                return
+            current = conv.get('current_handler')
+            if not current:
+                return
+            handler_account = current.get('accountId')
+            socketio = getattr(app, 'socketio', None)
+            if socketio and handler_account:
+                payload = {'conv_id': conv_id, 'conversation_id': conv.get('_id'), 'requester': account_id}
+                socketio.emit('request-access', payload, room=f"account:{handler_account}")
+        except Exception as e:
+            logger.error(f"Error in socket request-access handler: {e}")
+
 
     # Initialize APScheduler for token refresh jobs
     scheduler = APScheduler()
@@ -176,7 +321,7 @@ def create_app(env=None):
     except Exception:
         # If job exists or cannot be added, ignore
         pass
-
+        
     # Schedule Facebook token refresh every 30 minutes (if available)
     try:
         scheduler.add_job(id='facebook_token_refresh', func=lambda: facebook_refresh(app.mongo_client), trigger='interval', minutes=30)
@@ -184,6 +329,38 @@ def create_app(env=None):
         # If job exists or cannot be added, ignore
         pass
     
+    # Schedule lock expiration job (expire conversation locks every 60 seconds)
+    def _expire_and_broadcast_locks():
+        try:
+            from models.conversation import ConversationModel
+            cm = ConversationModel(app.mongo_client)
+            expired = cm.expire_locks()
+            if not expired:
+                return
+            socketio_inst = getattr(app, 'socketio', None)
+            for doc in expired:
+                try:
+                    org_id = doc.get('organizationId')
+                    # Attempt to reconstruct conv_id for UI (fallback to unknown platform)
+                    platform = doc.get('last_message', {}).get('platform') or 'unknown'
+                    conv_id = f"{platform}:{doc.get('oa_id') or ''}:{doc.get('customer_id') or ''}"
+                    payload = {
+                        'conv_id': conv_id,
+                        'conversation_id': doc.get('_id')
+                    }
+                    if socketio_inst and org_id:
+                        socketio_inst.emit('conversation-unlocked', payload, room=f"organization:{org_id}")
+                        logger.info(f"Expired lock broadcasted for conversation {doc.get('_id')} in org {org_id}")
+                except Exception as e:
+                    logger.error(f"Failed to broadcast expired lock for doc {doc}: {e}")
+        except Exception as e:
+            logger.error(f"Error in lock expiration job: {e}")
+
+    try:
+        scheduler.add_job(id='expire_conversation_locks', func=_expire_and_broadcast_locks, trigger='interval', seconds=60)
+    except Exception:
+        pass
+
     # Serve uploaded files
     @app.route('/uploads/avatars/<filename>')
     def serve_upload(filename):
@@ -224,7 +401,7 @@ if __name__ == '__main__':
     logger.info("=" * 50)
     logger.info(f"Environment: {app.config['FLASK_ENV']}")
     logger.info(f"Debug: {app.debug}")
-    logger.info(f"API Base URL: http://localhost:5000")
+    logger.info(f"API Base URL: http://103.7.40.236:5002")
     logger.info(f"Frontend URL: {app.config['FRONTEND_URL']}")
     logger.info("=" * 50)
     

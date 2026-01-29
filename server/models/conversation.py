@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
@@ -125,6 +125,19 @@ class ConversationModel:
                             v[nested_k] = nested_v.isoformat() + 'Z'
             except Exception:
                 pass
+
+        # Ensure current_handler presence and serialize lock_expires_at
+        if out.get('current_handler') and isinstance(out.get('current_handler'), dict):
+            # keep as-is; name/accountId should be present
+            pass
+        if out.get('lock_expires_at'):
+            try:
+                le = out.get('lock_expires_at')
+                if hasattr(le, 'isoformat') and callable(getattr(le, 'isoformat')):
+                    out['lock_expires_at'] = le.isoformat() + 'Z'
+            except Exception:
+                pass
+
         return out
 
     def upsert_conversation(self, oa_id, customer_id, last_message_text=None, last_message_created_at=None, 
@@ -304,8 +317,89 @@ class ConversationModel:
         elif account_id:
             query['accountId'] = account_id
         cursor = self.collection.find(query).sort('updated_at', -1).skip(skip).limit(limit)
+        logger.info(query)
         docs = [self._serialize(d) for d in list(cursor)]
         return docs
+
+    # Locking API
+    def lock_by_id(self, conversation_id, handler_account_id, handler_name, ttl_seconds=300):
+        """Acquire a lock for a conversation by conversation _id (string or ObjectId).
+        Returns the serialized updated document or None if failed.
+        """
+        try:
+            from bson.objectid import ObjectId
+            try:
+                conv_obj_id = ObjectId(conversation_id)
+            except Exception:
+                # Try finding string _id match
+                conv_obj_id = conversation_id
+        except Exception:
+            conv_obj_id = conversation_id
+        now = datetime.utcnow()
+        expires_at = now + timedelta(seconds=int(ttl_seconds))
+        result = self.collection.find_one_and_update(
+            {'_id': conv_obj_id, '$or': [{'current_handler': None}, {'lock_expires_at': {'$lte': now}}]},
+            {
+                '$set': {
+                    'current_handler': {
+                        'accountId': handler_account_id,
+                        'name': handler_name,
+                        'started_at': now,
+                    },
+                    'lock_expires_at': expires_at,
+                    'updated_at': now,
+                }
+            },
+            return_document=True
+        )
+        return self._serialize(result)
+
+    def unlock_by_id(self, conversation_id, requester_account_id=None, force=False):
+        """Release a lock for a conversation. Allows requester to unlock if they are the handler or force=True to force-unlock.
+        Returns the serialized updated document or None if no change.
+        """
+        try:
+            from bson.objectid import ObjectId
+            try:
+                conv_obj_id = ObjectId(conversation_id)
+            except Exception:
+                conv_obj_id = conversation_id
+        except Exception:
+            conv_obj_id = conversation_id
+
+        # If not force, ensure requester matches current_handler.accountId
+        if not force and requester_account_id:
+            res = self.collection.find_one_and_update(
+                {'_id': conv_obj_id, 'current_handler.accountId': requester_account_id},
+                {
+                    '$set': {'updated_at': datetime.utcnow()},
+                    '$unset': {'current_handler': '', 'lock_expires_at': ''}
+                },
+                return_document=True
+            )
+            return self._serialize(res)
+        else:
+            res = self.collection.find_one_and_update(
+                {'_id': conv_obj_id},
+                {
+                    '$set': {'updated_at': datetime.utcnow()},
+                    '$unset': {'current_handler': '', 'lock_expires_at': ''}
+                },
+                return_document=True
+            )
+            return self._serialize(res)
+
+    def expire_locks(self):
+        """Expire locks whose lock_expires_at <= now. Returns list of serialized updated conversations."""
+        now = datetime.utcnow()
+        res = list(self.collection.find({'lock_expires_at': {'$lte': now}}))
+        if not res:
+            return []
+        updated_ids = [r.get('_id') for r in res if r.get('_id')]
+        # unset fields for these docs
+        self.collection.update_many({'_id': {'$in': updated_ids}}, {'$set': {'updated_at': now}, '$unset': {'current_handler': '', 'lock_expires_at': ''}})
+        docs = list(self.collection.find({'_id': {'$in': updated_ids}}))
+        return [self._serialize(d) for d in docs]
 
     def update_nickname(self, oa_id, customer_id, user_id, nick_name, account_id=None, organization_id=None):
         """Update nickname for a conversation

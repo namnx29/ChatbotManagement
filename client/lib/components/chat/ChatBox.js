@@ -1,6 +1,6 @@
 'use client';
 
-import { Select, Space, Avatar, Input, Button, Switch, Image, Alert } from 'antd';
+import { Select, Space, Avatar, Input, Button, Switch, Image, Alert, App } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
@@ -80,8 +80,9 @@ const getRawDate = (msg) => {
 	return date;
 };
 
-export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange, onConversationUpdate }) {
-	const [message, setMessage] = useState('');
+export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange, onConversationUpdate, socket, accountId }) {
+	const { message } = App.useApp();
+	const [ChatMessage, setChatMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
 	const [showScrollButton, setShowScrollButton] = useState(false);
@@ -89,6 +90,53 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const [isAtBottom, setIsAtBottom] = useState(true);
 	const [nameModalVisible, setNameModalVisible] = useState(false);
 	const [showSidebar, setShowSidebar] = useState(false);
+
+	// Lock/handler info
+	const currentHandler = conversation?.current_handler || null;
+	const isHandler = !!(currentHandler && currentHandler.accountId && accountId && String(currentHandler.accountId) === String(accountId));
+	const isLocked = !!(currentHandler && currentHandler.accountId && !isHandler);
+
+	// Typing debounce management
+	const typingRef = useRef(false);
+	const typingTimeoutRef = useRef(null);
+
+	const stopTyping = () => {
+		if (typingTimeoutRef.current) {
+			clearTimeout(typingTimeoutRef.current);
+			typingTimeoutRef.current = null;
+		}
+		if (typingRef.current && socket && accountId) {
+			socket.emit('stop-typing', { account_id: accountId, conv_id: conversation.id });
+		}
+		typingRef.current = false;
+	};
+
+	useEffect(() => {
+		return () => {
+			// cleanup
+			stopTyping();
+		};
+	}, []);
+
+	const handleMessageChange = (e) => {
+		setChatMessage(e.target.value);
+		if (!socket || !accountId) return;
+		// Emit start-typing once, then debounce stop-typing
+		if (!typingRef.current) {
+			typingRef.current = true;
+			socket.emit('start-typing', { account_id: accountId, conv_id: conversation.id, ttl_seconds: 300 });
+		}
+		if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+		typingTimeoutRef.current = setTimeout(() => {
+			stopTyping();
+		}, 2000);
+	};
+
+	const handleRequestAccess = () => {
+		if (!socket || !accountId) return;
+		socket.emit('request-access', { account_id: accountId, conv_id: conversation.id });
+		try { message.alert('Yêu cầu quyền truy cập đã được gửi tới người xử lý.'); } catch (e) { }
+	};
 
 	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
 	const isDisconnected = platformStatus.is_connected === false;
@@ -166,11 +214,18 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	};
 
 	const handleSend = () => {
-		if (message.trim()) {
+		// Prevent sending if conversation is locked by another handler
+		if (isLocked && !isHandler) {
+			try { message.alert(`${currentHandler?.name || 'Người khác'} đang xử lý cuộc trò chuyện`); } catch (e) { }
+			return;
+		}
+		// Ensure we stop typing when sending
+		stopTyping();
+		if (ChatMessage.trim()) {
 			const newMessage = {
 				id: Date.now(),
 				created_at: new Date().toISOString(),
-				text: message,
+				text: ChatMessage,
 				sender: 'user',
 				time: new Date().toLocaleTimeString('vi-VN', {
 					hour: '2-digit',
@@ -178,7 +233,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 				}),
 				pending: true,
 			};
-			setMessage('');
+			setChatMessage('');
 			if (typeof onSendMessage === 'function') {
 				onSendMessage(newMessage);
 			}
@@ -186,6 +241,11 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	};
 
 	const handleImageUpload = (e) => {
+		// Do not allow image upload if locked by another handler
+		if (isLocked && !isHandler) {
+			try { message.alert(`${currentHandler?.name || 'Người khác'} đang xử lý cuộc trò chuyện`); } catch (e) { }
+			return;
+		}
 		const file = e.target.files?.[0];
 		if (file) {
 			const reader = new FileReader();
@@ -310,6 +370,20 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 					/>
 				</div>
 			</div>
+
+			{conversation.current_handler && (
+				<Alert
+					title={`${conversation.current_handler.name} đang xử lý cuộc trò chuyện`}
+					type="info"
+					showIcon
+					action={!isHandler && <Button size="default" style={{
+						background: '#6c3fb5',
+						borderColor: '#6c3fb5',
+						color: 'white',
+					}} onClick={handleRequestAccess}>Yêu cầu quyền chat</Button>}
+					style={{ margin: '8px 16px' }}
+				/>
+			)}
 
 			{/* Content Area - Split when sidebar is open */}
 			<div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -514,16 +588,16 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							<Button
 								icon={<PictureOutlined />}
 								size="large"
-								onClick={() => fileInputRef.current?.click()}
+								onClick={() => { if (isDisconnected || (isLocked && !isHandler)) return; fileInputRef.current?.click(); }}
 								style={{ flexShrink: 0 }}
-								disabled={isDisconnected}
+								disabled={isDisconnected || (isLocked && !isHandler)}
 							/>
 							<Input
 								placeholder={isDisconnected ? "Nền tảng không được kết nối..." : "Nhập tin nhắn..."}
-								value={message}
-								onChange={(e) => setMessage(e.target.value)}
-								onPressEnter={!isDisconnected ? handleSend : null}
-								disabled={isDisconnected}
+								value={ChatMessage}
+								onChange={handleMessageChange} onBlur={() => { if (!isDisconnected) stopTyping(); }}
+								onPressEnter={!isDisconnected && !(isLocked && !isHandler) ? handleSend : null}
+								disabled={isDisconnected || (isLocked && !isHandler)}
 								size="large"
 								style={{
 									flex: 1,
@@ -536,7 +610,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 								icon={<SendOutlined />}
 								size="large"
 								onClick={handleSend}
-								disabled={isDisconnected}
+								disabled={isDisconnected || (isLocked && !isHandler)}
 								style={{
 									background: '#6c3fb5',
 									borderColor: '#6c3fb5',

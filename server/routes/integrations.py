@@ -184,10 +184,9 @@ def get_all_conversations():
                     conversations = conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, account_id=account_id)
             else:
                 conversations = conversation_model.find_by_chatbot_id(chatbot_id, limit=2000, account_id=account_id)
-            
+
             for conv in conversations:
                 oa_id = conv.get('oa_id')
-                customer_info = conv.get('customer_info', {})
                 customer_id = conv.get('customer_id', '')
                 
                 # Extract platform from customer_id (format: "platform:sender_id")
@@ -301,3 +300,171 @@ def update_conversation_nickname():
     except Exception as e:
         logger.error(f"Error updating nickname: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+    
+# Conversation Locking Endpoints
+@integrations_bp.route('/conversations/<path:conv_id>/lock', methods=['POST'])
+def lock_conversation(conv_id):
+    """Acquire a lock for a conversation so others in the org are notified."""
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required'}), 400
+
+    try:
+        from models.conversation import ConversationModel
+        from models.user import UserModel
+        conv_model = ConversationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
+
+        parts = conv_id.split(':')
+        if len(parts) != 3:
+            return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+        platform, oa_id, sender_id = parts
+        customer_id = f"{platform}:{sender_id}"
+
+        user_doc = user_model.find_by_account_id(account_id)
+        if not user_doc:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+
+        role = user_doc.get('role', 'staff')
+        if role not in ('admin', 'staff'):
+            return jsonify({'success': False, 'message': 'Unauthorized role for locking'}), 403
+
+        user_org_id = user_model.get_user_organization_id(account_id)
+
+        # Find conversation in org context
+        conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org_id, account_id=account_id)
+        if not conv:
+            return jsonify({'success': False, 'message': 'Conversation not found'}), 404
+
+        # Check existing lock
+        current = conv.get('current_handler')
+        if current and current.get('accountId') != account_id:
+            return jsonify({'success': False, 'message': 'Conversation already locked', 'current_handler': current}), 409
+
+        ttl = (request.json or {}).get('ttl_seconds', 300)
+        handler_name = user_doc.get('name') or user_doc.get('username') or ''
+        updated = conv_model.lock_by_id(conv.get('_id'), account_id, handler_name, ttl_seconds=ttl)
+        if not updated:
+            return jsonify({'success': False, 'message': 'Failed to lock conversation'}), 500
+
+        # Notify org members via socket
+        try:
+            socketio = getattr(current_app, 'socketio', None)
+            if socketio and user_org_id:
+                payload = {
+                    'conv_id': conv_id,
+                    'conversation_id': updated.get('_id'),
+                    'handler': updated.get('current_handler'),
+                    'lock_expires_at': updated.get('lock_expires_at')
+                }
+                room = f"organization:{user_org_id}"
+                socketio.emit('conversation-locked', payload, room=room)
+        except Exception as e:
+            logger.error(f"Failed to emit lock event: {e}")
+
+        return jsonify({'success': True, 'data': updated}), 200
+    except Exception as e:
+        logger.error(f"Failed to lock conversation: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Internal error'}), 500
+
+
+@integrations_bp.route('/conversations/<path:conv_id>/unlock', methods=['POST'])
+def unlock_conversation(conv_id):
+    """Release a lock (by handler or admin)."""
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required'}), 400
+
+    try:
+        from models.conversation import ConversationModel
+        from models.user import UserModel
+        conv_model = ConversationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
+
+        parts = conv_id.split(':')
+        if len(parts) != 3:
+            return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+        platform, oa_id, sender_id = parts
+        customer_id = f"{platform}:{sender_id}"
+
+        user_doc = user_model.find_by_account_id(account_id)
+        if not user_doc:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+
+        user_org_id = user_model.get_user_organization_id(account_id)
+        conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org_id, account_id=account_id)
+        if not conv:
+            return jsonify({'success': False, 'message': 'Conversation not found'}), 404
+
+        # If requester is admin, allow force unlock via param
+        force = bool((request.json or {}).get('force', False)) and user_doc.get('role') == 'admin'
+
+        updated = conv_model.unlock_by_id(conv.get('_id'), requester_account_id=account_id, force=force)
+        if not updated:
+            return jsonify({'success': False, 'message': 'Unlock not permitted or failed'}), 403
+
+        # Notify org members
+        try:
+            socketio = getattr(current_app, 'socketio', None)
+            if socketio and user_org_id:
+                payload = {
+                    'conv_id': conv_id,
+                    'conversation_id': updated.get('_id')
+                }
+                room = f"organization:{user_org_id}"
+                socketio.emit('conversation-unlocked', payload, room=room)
+        except Exception as e:
+            logger.error(f"Failed to emit unlock event: {e}")
+
+        return jsonify({'success': True, 'data': updated}), 200
+    except Exception as e:
+        logger.error(f"Failed to unlock conversation: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Internal error'}), 500
+
+
+@integrations_bp.route('/conversations/<path:conv_id>/request-access', methods=['POST'])
+def request_access(conv_id):
+    """Ask current handler for access — sends a socket event to the handler's account room."""
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required'}), 400
+
+    try:
+        from models.conversation import ConversationModel
+        from models.user import UserModel
+        conv_model = ConversationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
+
+        parts = conv_id.split(':')
+        if len(parts) != 3:
+            return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+        platform, oa_id, sender_id = parts
+        customer_id = f"{platform}:{sender_id}"
+
+        user_org_id = user_model.get_user_organization_id(account_id)
+        conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org_id, account_id=account_id)
+        if not conv:
+            return jsonify({'success': False, 'message': 'Conversation not found'}), 404
+
+        current = conv.get('current_handler')
+        if not current:
+            return jsonify({'success': False, 'message': 'Conversation is not currently locked'}), 400
+
+        handler_account = current.get('accountId')
+        # Emit a request-access event to the handler's account room
+        try:
+            socketio = getattr(current_app, 'socketio', None)
+            if socketio and handler_account:
+                payload = {
+                    'conv_id': conv_id,
+                    'conversation_id': conv.get('_id'),
+                    'requester': account_id
+                }
+                socketio.emit('request-access', payload, room=f"account:{handler_account}")
+        except Exception as e:
+            logger.error(f"Failed to emit request-access event: {e}")
+
+        return jsonify({'success': True}), 200
+    except Exception as e:
+        logger.error(f"Failed to request access: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Internal error'}), 500

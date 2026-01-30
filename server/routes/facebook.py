@@ -293,6 +293,16 @@ def facebook_callback():
         organization_id=user_org_id,
     )
 
+    # Emit integration-added event so staff/admin clients update in real-time
+    try:
+        _emit_socket('integration-added', {
+            'integration_id': integration.get('_id'),
+            'oa_id': integration.get('oa_id'),
+            'platform': 'facebook'
+        }, account_id=integration.get('accountId'), organization_id=user_org_id)
+    except Exception as e:
+        logger.error(f"Emit integration-added failed: {e}")
+
     # Log integration result for easier debugging and verification
     try:
         logger.info(f"Facebook integration persisted: platform=facebook, oa_id={integration.get('oa_id')}, account={integration.get('accountId')}, chatbotId={integration.get('chatbotId')}, avatar_url={integration.get('avatar_url')}")

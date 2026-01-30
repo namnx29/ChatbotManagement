@@ -59,6 +59,25 @@ def activate_integration(integration_id):
     updated = model.set_active(integration_id, True)
     if not updated:
         return jsonify({'success': False, 'message': 'Not found or not authorized'}), 404
+
+    # Emit integration-added to notify staff/admin
+    try:
+        socketio = getattr(current_app, 'socketio', None)
+        if socketio:
+            payload = {
+                'integration_id': integration_id,
+                'oa_id': updated.get('oa_id'),
+                'platform': updated.get('platform')
+            }
+            org_id = updated.get('organizationId') or user_model.get_user_organization_id(account_id)
+            if org_id:
+                socketio.emit('integration-added', payload, room=f"organization:{org_id}")
+            owner_account = updated.get('accountId')
+            if owner_account:
+                socketio.emit('integration-added', payload, room=f"account:{owner_account}")
+    except Exception as e:
+        logger.error(f"Emit integration-added failed: {str(e)}")
+
     return jsonify({'success': True, 'data': updated}), 200
 
 
@@ -87,6 +106,25 @@ def deactivate_integration(integration_id):
     updated = model.set_active(integration_id, False)
     if not updated:
         return jsonify({'success': False, 'message': 'Not found or not authorized'}), 404
+
+    # Emit integration-removed to notify staff/admin
+    try:
+        socketio = getattr(current_app, 'socketio', None)
+        if socketio:
+            payload = {
+                'integration_id': integration_id,
+                'oa_id': updated.get('oa_id'),
+                'platform': updated.get('platform')
+            }
+            org_id = updated.get('organizationId') or user_model.get_user_organization_id(account_id)
+            if org_id:
+                socketio.emit('integration-removed', payload, room=f"organization:{org_id}")
+            owner_account = updated.get('accountId')
+            if owner_account:
+                socketio.emit('integration-removed', payload, room=f"account:{owner_account}")
+    except Exception as e:
+        logger.error(f"Emit integration-removed failed: {str(e)}")
+
     return jsonify({'success': True, 'data': updated}), 200
 
 
@@ -116,6 +154,26 @@ def delete_integration(integration_id):
     deleted = model.delete_integration(integration_id)
     if not deleted:
         return jsonify({'success': False, 'message': 'Delete failed'}), 500
+
+    # Notify organization members and owner account that this integration was removed
+    try:
+        socketio = getattr(current_app, 'socketio', None)
+        if socketio:
+            payload = {
+                'integration_id': integration_id,
+                'oa_id': existing.get('oa_id'),
+                'platform': existing.get('platform')
+            }
+            # Prefer integration.organizationId if present, else derive from requester's organization
+            org_id = existing.get('organizationId') or user_model.get_user_organization_id(account_id)
+            if org_id:
+                socketio.emit('integration-removed', payload, room=f"organization:{org_id}")
+            owner_account = existing.get('accountId')
+            if owner_account:
+                socketio.emit('integration-removed', payload, room=f"account:{owner_account}")
+    except Exception as e:
+        logger.error(f"Emit integration-removed failed: {str(e)}")
+
     return jsonify({'success': True, 'data': deleted}), 200
 
 def update_profile(self, integration_id, name=None, avatar_url=None, meta=None):

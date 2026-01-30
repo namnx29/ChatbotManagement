@@ -397,15 +397,27 @@ export default function ChatManagementPage() {
     //   try { message.error(`Cuộc trò chuyện đang được xử lý bởi ${payload.current_handler?.name || 'ai đó'}`); } catch (e) { }
     // };
 
+    const handleForceLogout = (payload) => {
+      // Immediately clear local session data and force user to login again
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch (e) { }
+      // Redirect to login page
+      window.location.href = '/login';
+    };
+
     socket.on('conversation-locked', handleLocked);
     socket.on('conversation-unlocked', handleUnlocked);
     socket.on('request-access', handleRequestAccess);
+    socket.on('force-logout', handleForceLogout);
     // socket.on('lock-failed', handleLockFailed);
 
     return () => {
       socket.off('conversation-locked', handleLocked);
       socket.off('conversation-unlocked', handleUnlocked);
       socket.off('request-access', handleRequestAccess);
+      socket.off('force-logout', handleForceLogout);
       // socket.off('lock-failed', handleLockFailed);
     };
   }, [selectedChat?.id, message]);

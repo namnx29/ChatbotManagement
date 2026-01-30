@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from models.user import UserModel
 from config import Config
 import logging
@@ -419,6 +419,14 @@ def init_user_routes(mongo_client):
                 staff_account_id=staff_account_id,
                 parent_account_id=admin_account_id
             )
+
+            # Notify any active session for this staff to force logout in real-time
+            try:
+                socketio = getattr(current_app, 'socketio', None)
+                if socketio:
+                    socketio.emit('force-logout', {'reason': 'account_deleted'}, room=f"account:{staff_account_id}")
+            except Exception as e:
+                logger.error(f"Emit force-logout failed: {str(e)}")
             
             return jsonify({
                 'success': True,

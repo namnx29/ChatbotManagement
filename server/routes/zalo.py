@@ -305,6 +305,16 @@ def zalo_callback():
         organization_id=user_org_id,
     )
 
+    # Emit integration-added event so staff/admin clients update in real-time
+    try:
+        _emit_socket_to_account('integration-added', {
+            'integration_id': integration.get('_id'),
+            'oa_id': integration.get('oa_id'),
+            'platform': 'zalo'
+        }, integration.get('accountId'), user_org_id)
+    except Exception as e:
+        logger.error(f"Emit integration-added failed: {e}")
+
     # remove PKCE entry
     try:
         del_key(f"zalo:pkce:{state}")

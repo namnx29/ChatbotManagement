@@ -396,21 +396,59 @@ export default function ChatManagementPage() {
     // const handleLockFailed = (payload) => {
     //   try { message.error(`Cuộc trò chuyện đang được xử lý bởi ${payload.current_handler?.name || 'ai đó'}`); } catch (e) { }
     // };
-
     const handleForceLogout = (payload) => {
-      // Immediately clear local session data and force user to login again
-      try {
-        localStorage.clear();
-        sessionStorage.clear();
-      } catch (e) { }
-      // Redirect to login page
-      window.location.href = '/login';
+      try { message.info('Tài khoản đã bị xóa. Bạn sẽ được đăng xuất.'); } catch (e) { }
+      setTimeout(() => {
+        try { localStorage.clear(); sessionStorage.clear(); } catch (e) { }
+        window.location.href = '/login';
+      }, 1200);
+    };
+
+
+    const handleIntegrationRemoved = (payload) => {
+      const { integration_id, oa_id, platform } = payload || {};
+
+      // Mark conversations that belong to the removed integration as disconnected
+      setConversations(prev => prev.map(c => {
+        if (oa_id && c.oa_id && String(c.oa_id) === String(oa_id)) {
+          return { ...c, platform_status: { is_connected: false, disconnected_at: new Date().toISOString() } };
+        }
+        return c;
+      }));
+
+      // Update the currently open chat if it matches
+      if (selectedChat?.oa_id && String(selectedChat.oa_id) === String(oa_id)) {
+        setSelectedChat(prev => prev ? { ...prev, platform_status: { is_connected: false, disconnected_at: new Date().toISOString() } } : prev);
+      }
+
+      try { message.warning(`Nền tảng ${platform || ''} đã bị gỡ. Kết nối bị ngắt.`); } catch (e) { }
+    };
+
+    const handleIntegrationAdded = (payload) => {
+      const { integration_id, oa_id, platform } = payload || {};
+
+      // Mark conversations that belong to the added integration as connected
+      setConversations(prev => prev.map(c => {
+        if (oa_id && c.oa_id && String(c.oa_id) === String(oa_id)) {
+          return { ...c, platform_status: { is_connected: true, disconnected_at: null } };
+        }
+        return c;
+      }));
+
+      // Update the currently open chat if it matches
+      if (selectedChat?.oa_id && String(selectedChat.oa_id) === String(oa_id)) {
+        setSelectedChat(prev => prev ? { ...prev, platform_status: { is_connected: true, disconnected_at: null } } : prev);
+      }
+
+      try { message.success(`Nền tảng ${platform || ''} đã được kết nối`); } catch (e) { }
     };
 
     socket.on('conversation-locked', handleLocked);
     socket.on('conversation-unlocked', handleUnlocked);
     socket.on('request-access', handleRequestAccess);
     socket.on('force-logout', handleForceLogout);
+    socket.on('integration-added', handleIntegrationAdded);
+    socket.on('integration-removed', handleIntegrationRemoved);
     // socket.on('lock-failed', handleLockFailed);
 
     return () => {
@@ -418,6 +456,8 @@ export default function ChatManagementPage() {
       socket.off('conversation-unlocked', handleUnlocked);
       socket.off('request-access', handleRequestAccess);
       socket.off('force-logout', handleForceLogout);
+      socket.off('integration-added', handleIntegrationAdded);
+      socket.off('integration-removed', handleIntegrationRemoved);
       // socket.off('lock-failed', handleLockFailed);
     };
   }, [selectedChat?.id, message]);

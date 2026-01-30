@@ -424,7 +424,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 
 							return (
 								<div key={`container-${messageKey}`}>
-									{isNewDay && (
+									{isNewDay && !msg.failed && (
 										<div style={{
 											textAlign: 'center',
 											margin: '24px 0 16px',
@@ -453,7 +453,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 											marginBottom: '16px',
 											alignItems: 'flex-end',
 											gap: '8px',
-											opacity: msg.pending ? 0.6 : 1,
+											opacity: (msg.pending || msg.failed) ? 0.6 : 1,
 										}}
 									>
 										{msg.sender === 'customer' && (
@@ -515,6 +515,19 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 													}}
 												>
 													{normalizeMessageText(msg)}
+												</div>
+											)}
+											{msg.failed && (
+												<div style={{
+													display: 'flex',
+													alignItems: 'center',
+													gap: '6px',
+													color: '#ff4d4f',
+													marginTop: '4px',
+													fontSize: '12px',
+												}}>
+													<InfoCircleOutlined style={{ color: '#ff4d4f' }} />
+													<span>Gửi tin nhắn bị lỗi</span>
 												</div>
 											)}
 											<span

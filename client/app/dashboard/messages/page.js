@@ -393,20 +393,20 @@ export default function ChatManagementPage() {
       }
     };
 
-    const handleLockFailed = (payload) => {
-      try { message.error(`Cuộc trò chuyện đang được xử lý bởi ${payload.current_handler?.name || 'ai đó'}`); } catch (e) { }
-    };
+    // const handleLockFailed = (payload) => {
+    //   try { message.error(`Cuộc trò chuyện đang được xử lý bởi ${payload.current_handler?.name || 'ai đó'}`); } catch (e) { }
+    // };
 
     socket.on('conversation-locked', handleLocked);
     socket.on('conversation-unlocked', handleUnlocked);
     socket.on('request-access', handleRequestAccess);
-    socket.on('lock-failed', handleLockFailed);
+    // socket.on('lock-failed', handleLockFailed);
 
     return () => {
       socket.off('conversation-locked', handleLocked);
       socket.off('conversation-unlocked', handleUnlocked);
       socket.off('request-access', handleRequestAccess);
-      socket.off('lock-failed', handleLockFailed);
+      // socket.off('lock-failed', handleLockFailed);
     };
   }, [selectedChat?.id, message]);
 

@@ -1607,6 +1607,32 @@ def send_conversation_message(conv_id):
                     'customer_info': conversation_doc.get('customer_info', {}),
                     'platform': 'zalo',
                 }, integration.get('accountId'), integration.get('organizationId'))
+                # Attempt to set persistent handler on first outgoing message (first-sender becomes handler)
+                try:
+                    try:
+                        # Use the requesting account (account_id) as the handler, not the integration owner
+                        handler_account = account_id
+                        handler_name = None
+                        try:
+                            handler_user = user_model.find_by_account_id(handler_account) if handler_account else None
+                            if handler_user:
+                                handler_name = handler_user.get('name') or handler_user.get('username')
+                        except Exception:
+                            handler_name = handler_name or integration.get('name')
+                        try:
+                            claimed = conversation_model.set_handler_if_unset(conversation_id, handler_account, handler_name)
+                            if claimed:
+                                _emit_socket_to_account('conversation-locked', {
+                                    'conv_id': conv_id,
+                                    'conversation_id': conversation_id,
+                                    'handler': claimed.get('current_handler')
+                                }, integration.get('accountId'), integration.get('organizationId'))
+                        except Exception as e:
+                            logger.debug(f"Failed to claim conversation handler: {e}")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
                 logger.info(f"Emitted socket events for outgoing message to account {integration.get('accountId')}")
         except Exception as e:
             logger.error(f"Failed to emit socket event for outgoing message: {e}")

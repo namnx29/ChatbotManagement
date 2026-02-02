@@ -354,6 +354,42 @@ class ConversationModel:
         )
         return self._serialize(result)
 
+    def set_handler_if_unset(self, conversation_id, handler_account_id, handler_name):
+        """Set a persistent handler for a conversation only if none exists.
+        This does NOT set a TTL — it's a persistent assignment used for "first-sender becomes handler" behavior.
+        Returns the serialized updated document or None if another handler already exists.
+        """
+        try:
+            from bson.objectid import ObjectId
+            try:
+                conv_obj_id = ObjectId(conversation_id)
+            except Exception:
+                conv_obj_id = conversation_id
+        except Exception:
+            conv_obj_id = conversation_id
+        now = datetime.utcnow()
+        result = self.collection.find_one_and_update(
+            {
+                '_id': conv_obj_id,
+                '$or': [
+                    {'current_handler': None},
+                    {'current_handler': {'$exists': False}}
+                ]
+            },
+            {
+                '$set': {
+                    'current_handler': {
+                        'accountId': handler_account_id,
+                        'name': handler_name,
+                        'started_at': now,
+                    },
+                    'updated_at': now,
+                }
+            },
+            return_document=True
+        )
+        return self._serialize(result)
+
     def unlock_by_id(self, conversation_id, requester_account_id=None, force=False):
         """Release a lock for a conversation. Allows requester to unlock if they are the handler or force=True to force-unlock.
         Returns the serialized updated document or None if no change.

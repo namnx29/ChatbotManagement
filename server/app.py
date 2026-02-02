@@ -167,81 +167,14 @@ def create_app(env=None):
     # Socket event handlers for conversation locking
     @app.socketio.on('start-typing')
     def socket_start_typing(data):
-        try:
-            from models.user import UserModel
-            from models.conversation import ConversationModel
-            account_id = data.get('account_id') or data.get('accountId')
-            conv_id = data.get('conv_id') or data.get('convId')
-            ttl = int(data.get('ttl_seconds') or data.get('ttl') or 300)
-            if not account_id or not conv_id:
-                return
-            user_model = UserModel(app.mongo_client)
-            user = user_model.find_by_account_id(account_id)
-            if not user:
-                return
-            # Only staff/admin can lock
-            if user.get('role') not in ('admin', 'staff'):
-                return
-            user_org = user_model.get_user_organization_id(account_id)
-            conv_model = ConversationModel(app.mongo_client)
-            parts = conv_id.split(':')
-            if len(parts) != 3:
-                return
-            platform, oa_id, sender_id = parts
-            customer_id = f"{platform}:{sender_id}"
-            conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org, account_id=account_id)
-            if not conv:
-                return
-            # Try to lock
-            name = user.get('name') or user.get('username')
-            updated = conv_model.lock_by_id(conv.get('_id'), account_id, name, ttl_seconds=ttl)
-            if not updated:
-                # already locked by someone else -> notify requester
-                socketio = getattr(app, 'socketio', None)
-                if socketio:
-                    socketio.emit('lock-failed', {'conv_id': conv_id, 'current_handler': conv.get('current_handler')}, room=f"account:{account_id}")
-                return
-            # Broadcast lock event to org room
-            socketio = getattr(app, 'socketio', None)
-            if socketio and user_org:
-                payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id'), 'handler': updated.get('current_handler'), 'lock_expires_at': updated.get('lock_expires_at')}
-                socketio.emit('conversation-locked', payload, room=f"organization:{user_org}")
-        except Exception as e:
-            logger.error(f"Error in socket start-typing handler: {e}")
+        # Typing events no longer acquire locks on the server.
+        # This handler is intentionally a no-op to prevent typing-based locking.
+        return
 
     @app.socketio.on('stop-typing')
     def socket_stop_typing(data):
-        try:
-            from models.user import UserModel
-            from models.conversation import ConversationModel
-            account_id = data.get('account_id') or data.get('accountId')
-            conv_id = data.get('conv_id') or data.get('convId')
-            if not account_id or not conv_id:
-                return
-            user_model = UserModel(app.mongo_client)
-            user = user_model.find_by_account_id(account_id)
-            if not user:
-                return
-            user_org = user_model.get_user_organization_id(account_id)
-            conv_model = ConversationModel(app.mongo_client)
-            parts = conv_id.split(':')
-            if len(parts) != 3:
-                return
-            platform, oa_id, sender_id = parts
-            customer_id = f"{platform}:{sender_id}"
-            conv = conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org, account_id=account_id)
-            if not conv:
-                return
-            updated = conv_model.unlock_by_id(conv.get('_id'), requester_account_id=account_id, force=False)
-            if not updated:
-                return
-            # Broadcast unlock event
-            socketio = getattr(app, 'socketio', None)
-            if socketio and user_org:
-                payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id')}
-                socketio.emit('conversation-unlocked', payload, room=f"organization:{user_org}")
-        except Exception as e:
-            logger.error(f"Error in socket stop-typing handler: {e}")
+        # Typing stop is a no-op for lock management.
+        return
 
     @app.socketio.on('complete-conversation')
     def socket_complete_conversation(data):
@@ -307,6 +240,31 @@ def create_app(env=None):
                 socketio.emit('request-access', payload, room=f"account:{handler_account}")
         except Exception as e:
             logger.error(f"Error in socket request-access handler: {e}")
+
+    @app.socketio.on('request-access-response')
+    def socket_request_access_response(data):
+        """Handler for responses by the current handler to an access request.
+        Expects: { 'conv_id': ..., 'requester': <accountId>, 'accepted': True|False, 'account_id': <responder account id> }
+        Emits 'request-access-response' to the original requester account room with the decision.
+        """
+        try:
+            requester = data.get('requester')
+            conv_id = data.get('conv_id')
+            accepted = bool(data.get('accepted'))
+            responder = data.get('account_id') or data.get('accountId')
+            if not requester or not conv_id or responder is None:
+                return
+            socketio = getattr(app, 'socketio', None)
+            if socketio:
+                payload = {
+                    'conv_id': conv_id,
+                    'accepted': accepted,
+                    'responder': responder,
+                }
+                # send direct response to requester
+                socketio.emit('request-access-response', payload, room=f"account:{requester}")
+        except Exception as e:
+            logger.error(f"Error in socket request-access-response handler: {e}")
 
 
     # Initialize APScheduler for token refresh jobs

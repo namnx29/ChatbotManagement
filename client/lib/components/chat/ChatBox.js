@@ -1,6 +1,6 @@
 'use client';
 
-import { Select, Space, Avatar, Input, Button, Switch, Image, Alert, App } from 'antd';
+import { Select, Space, Avatar, Input, Button, Switch, Image, Alert, App, Modal } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
@@ -15,7 +15,7 @@ import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import CustomerNameChangeModal from '@/lib/components/popup/CustomerNameChangeModal';
-import { getAvatarUrl } from '@/lib/api';
+import { getAvatarUrl, fetchProfile } from '@/lib/api';
 
 dayjs.locale('vi');
 const { TextArea } = Input;
@@ -90,6 +90,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const [isAtBottom, setIsAtBottom] = useState(true);
 	const [nameModalVisible, setNameModalVisible] = useState(false);
 	const [showSidebar, setShowSidebar] = useState(false);
+	// Request-access cooldown (prevent spamming)
+	const [requestCooldown, setRequestCooldown] = useState(false);
+	const requestCooldownRef = useRef(null);
+	// Handler modal state when someone requests access
+	const [requestModalVisible, setRequestModalVisible] = useState(false);
+	const [requestModalRequester, setRequestModalRequester] = useState(null);
 
 	// Lock/handler info
 	const currentHandler = conversation?.current_handler || null;
@@ -106,7 +112,6 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 			typingTimeoutRef.current = null;
 		}
 		if (typingRef.current && socket && accountId) {
-			socket.emit('stop-typing', { account_id: accountId, conv_id: conversation.id });
 		}
 		typingRef.current = false;
 	};
@@ -118,13 +123,74 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!socket) return;
+
+		// Handler: listen for incoming requests to confirm end session
+		const onRequestAccess = async (payload) => {
+			try {
+				if (!isHandler) return; // only show modal to current handler
+				if (!payload || !payload.conv_id) return;
+				if (payload.conv_id !== conversation.id) return;
+				try {
+					const result = await fetchProfile(payload.requester);
+					setRequestModalRequester(result.data.name);
+        } catch (e) { }
+				setRequestModalVisible(true);
+			} catch (e) {
+				// ignore
+			}
+		};
+
+		const onRequestAccessResponse = (payload) => {
+			try {
+				if (!payload || payload.conv_id !== conversation.id) return;
+				if (payload.accepted) {
+					message.success('Yêu cầu quyền truy cập đã được chấp nhận');
+				} else {
+					message.info('Yêu cầu quyền truy cập đã bị từ chối');
+				}
+			} catch (e) { }
+		};
+
+		socket.on('request-access', onRequestAccess);
+		socket.on('request-access-response', onRequestAccessResponse);
+
+		return () => {
+			socket.off('request-access', onRequestAccess);
+			socket.off('request-access-response', onRequestAccessResponse);
+			if (requestCooldownRef.current) clearTimeout(requestCooldownRef.current);
+		};
+	}, [socket, isHandler, conversation.id]);
+
+	const handleRequestModalConfirm = async () => {
+		// Handler confirms: notify requester and end session
+		if (!socket || !requestModalRequester) {
+			setRequestModalVisible(false);
+			return;
+		}
+		// Inform requester of acceptance
+		socket.emit('request-access-response', { conv_id: conversation.id, requester: requestModalRequester, accepted: true, account_id: accountId });
+		// End session (unlock)
+		socket.emit('complete-conversation', { account_id: accountId, conv_id: conversation.id });
+		setRequestModalVisible(false);
+		try { message.success('Bạn đã kết thúc phiên và chấp nhận yêu cầu.'); } catch (e) { }
+	};
+
+	const handleRequestModalCancel = () => {
+		if (socket && requestModalRequester) {
+			socket.emit('request-access-response', { conv_id: conversation.id, requester: requestModalRequester, accepted: false, account_id: accountId });
+		}
+		setRequestModalVisible(false);
+		try { message.info('Bạn đã từ chối yêu cầu truy cập.'); } catch (e) { }
+	};
+
 	const handleMessageChange = (e) => {
 		setChatMessage(e.target.value);
 		if (!socket || !accountId) return;
 		// Emit start-typing once, then debounce stop-typing
 		if (!typingRef.current) {
 			typingRef.current = true;
-			socket.emit('start-typing', { account_id: accountId, conv_id: conversation.id, ttl_seconds: 300 });
 		}
 		if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
 		typingTimeoutRef.current = setTimeout(() => {
@@ -134,7 +200,25 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 
 	const handleRequestAccess = () => {
 		if (!socket || !accountId) return;
+
+		// If current user is the handler, treat button as "End session"
+		if (isHandler) {
+			// End session: ask server to complete/unlock conversation
+			socket.emit('complete-conversation', { account_id: accountId, conv_id: conversation.id });
+			try { message.success('Đã kết thúc phiên xử lý cuộc trò chuyện'); } catch (e) { }
+			return;
+		}
+
+		// Non-handler: request access flow with client-side cooldown
+		if (requestCooldown) {
+			try { message.warn('Bạn đã gửi yêu cầu gần đây, vui lòng chờ trước khi gửi lại.'); } catch (e) { }
+			return;
+		}
+
 		socket.emit('request-access', { account_id: accountId, conv_id: conversation.id });
+		setRequestCooldown(true);
+		// 30s cooldown
+		requestCooldownRef.current = setTimeout(() => setRequestCooldown(false), 30000);
 		try { message.alert('Yêu cầu quyền truy cập đã được gửi tới người xử lý.'); } catch (e) { }
 	};
 
@@ -352,10 +436,38 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							)}
 						</div>
 					</div>
+
+					{/* Request Access Modal for handler */}
+					<Modal
+						title="Yêu cầu quyền xử lý"
+						open={requestModalVisible}
+						onOk={handleRequestModalConfirm}
+						onCancel={handleRequestModalCancel}
+						okText="Chấp nhận và kết thúc phiên"
+						cancelText="Từ chối"
+					>
+						<p>Người dùng <strong>{requestModalRequester}</strong> đang yêu cầu quyền kết thúc phiên này. Bạn có muốn chấp nhận và kết thúc phiên không?</p>
+					</Modal>
 				</div>
 
 				<div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
 					<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+						{isHandler ? (
+							<Button size="default" style={{
+								background: '#ff4d4f',
+								borderColor: '#ff4d4f',
+								color: 'white',
+							}} onClick={handleRequestAccess}>Kết thúc phiên</Button>
+						) : (
+							// Only show request button when conversation is currently handled by someone else
+							conversation.current_handler ? (
+								<Button size="default" style={{
+									background: '#6c3fb5',
+									borderColor: '#6c3fb5',
+									color: 'white',
+								}} onClick={handleRequestAccess} disabled={!isLocked}>{requestCooldown ? 'Đã gửi yêu cầu' : 'Yêu cầu quyền chat'}</Button>
+							) : null
+						)}
 						<RobotOutlined style={{ fontSize: '18px', color: autoReply ? '#6c3fb5' : '#999' }} />
 						<span style={{ fontSize: '14px', marginRight: '4px' }}>Auto-reply</span>
 						<Switch
@@ -372,17 +484,19 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 			</div>
 
 			{conversation.current_handler && (
-				<Alert
-					title={`${conversation.current_handler.name} đang xử lý cuộc trò chuyện`}
-					type="info"
-					showIcon
-					action={!isHandler && <Button size="default" style={{
-						background: '#6c3fb5',
-						borderColor: '#6c3fb5',
-						color: 'white',
-					}} onClick={handleRequestAccess}>Yêu cầu quyền chat</Button>}
-					style={{ margin: '8px 16px' }}
-				/>
+				(() => {
+					const handler = conversation.current_handler;
+					const isHandledByOwner = handler && conversation.accountId && String(handler.accountId) === String(conversation.accountId);
+					const title = isHandler ? 'Bạn đang xử lý cuộc trò chuyện' : (isHandledByOwner ? 'Quản trị viên đang xử lý cuộc trò chuyện' : `${handler.name} đang xử lý cuộc trò chuyện`);
+					return (
+						<Alert
+							title={title}
+							type="info"
+							showIcon
+							style={{ margin: '8px 16px' }}
+						/>
+					);
+				})()
 			)}
 
 			{/* Content Area - Split when sidebar is open */}

@@ -406,7 +406,7 @@ export default function ChatManagementPage() {
 
 
     const handleIntegrationRemoved = (payload) => {
-      const { integration_id, oa_id, platform } = payload || {};
+      const { oa_id, platform } = payload || {};
 
       // Mark conversations that belong to the removed integration as disconnected
       setConversations(prev => prev.map(c => {
@@ -425,7 +425,7 @@ export default function ChatManagementPage() {
     };
 
     const handleIntegrationAdded = (payload) => {
-      const { integration_id, oa_id, platform } = payload || {};
+      const { oa_id, platform } = payload || {};
 
       // Mark conversations that belong to the added integration as connected
       setConversations(prev => prev.map(c => {

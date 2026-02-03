@@ -20,8 +20,11 @@ class FlaskUser(UserMixin):
 
     @property
     def is_active(self):
-        # We can extend this later to check a 'disabled' flag
-        return True
+       # Honor 'is_active' flag on user document (defaults to True)
+        try:
+            return bool(self.user_doc.get('is_active', True))
+        except Exception:
+            return True
 
 class UserModel:
     """User model for MongoDB operations"""
@@ -486,6 +489,7 @@ class UserModel:
             'name': name,
             'phone_number': phone_number,
             'password': password,
+            'is_active': True,
             'is_verified': True,
             'role': 'staff',
             'organizationId': parent_organization_id,
@@ -719,3 +723,22 @@ class UserModel:
         if not user:
             return None
         return user.get('organizationId')
+
+    def update_staff_active(self, staff_account_id, parent_account_id, is_active):
+        """
+        Toggle staff active flag
+        """
+        staff = self.collection.find_one({
+            'accountId': staff_account_id,
+            'parent_account_id': parent_account_id,
+            'role': 'staff'
+        })
+        if not staff:
+            raise ValueError('Staff account not found or unauthorized')
+
+        result = self.collection.find_one_and_update(
+            {'_id': staff['_id']},
+            {'$set': {'is_active': bool(is_active), 'updated_at': datetime.utcnow()}},
+            return_document=True
+        )
+        return result

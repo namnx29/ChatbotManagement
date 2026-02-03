@@ -327,7 +327,8 @@ def init_user_routes(mongo_client):
                     'username': staff['username'],
                     'name': staff['name'],
                     'phoneNumber': staff['phone_number'],
-                    'createdAt': staff['created_at'].isoformat() if staff.get('created_at') else None
+                    'is_active': staff.get('is_active', True),
+                    'avatarUrl': staff.get('avatar_url', None)
                 })
             
             return jsonify({
@@ -343,6 +344,39 @@ def init_user_routes(mongo_client):
         except Exception as e:
             logger.error(f"List staff error: {str(e)}")
             return jsonify({'success': False, 'message': 'Failed to list staff'}), 500
+
+    @user_bp.route('/staff/<staff_account_id>/active', methods=['POST'])
+    def set_staff_active(staff_account_id):
+        """Set staff is_active flag (block/unblock)"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+
+            data = request.get_json() or {}
+            if 'is_active' not in data:
+                return jsonify({'success': False, 'message': 'is_active is required'}), 400
+
+            is_active = bool(data.get('is_active'))
+
+            updated = user_model.update_staff_active(staff_account_id, admin_account_id, is_active)
+
+            # If disabling, emit force-logout to active sessions for that staff
+            if not is_active:
+                try:
+                    socketio = getattr(current_app, 'socketio', None)
+                    if socketio:
+                        socketio.emit('force-logout', {'reason': 'account_disabled'}, room=f"account:{staff_account_id}")
+                except Exception as e:
+                    logger.error(f"Emit force-logout failed: {str(e)}")
+
+            return jsonify({'success': True, 'data': {'accountId': updated.get('accountId'), 'is_active': updated.get('is_active', True)}}), 200
+        except ValueError as e:
+            return jsonify({'success': False, 'message': str(e)}), 400
+        except Exception as e:
+            logger.error(f"Set staff active error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to set staff active flag'}), 500
+        
 
     @user_bp.route('/staff/<staff_account_id>', methods=['PUT'])
     def update_staff(staff_account_id):
@@ -419,7 +453,7 @@ def init_user_routes(mongo_client):
                 staff_account_id=staff_account_id,
                 parent_account_id=admin_account_id
             )
-
+            
             # Notify any active session for this staff to force logout in real-time
             try:
                 socketio = getattr(current_app, 'socketio', None)
@@ -427,7 +461,7 @@ def init_user_routes(mongo_client):
                     socketio.emit('force-logout', {'reason': 'account_deleted'}, room=f"account:{staff_account_id}")
             except Exception as e:
                 logger.error(f"Emit force-logout failed: {str(e)}")
-            
+
             return jsonify({
                 'success': True,
                 'message': 'Staff account deleted successfully'

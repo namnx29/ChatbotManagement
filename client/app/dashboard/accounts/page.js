@@ -1,10 +1,10 @@
 'use client';
 
-import { Button, Table, Avatar, Tag, App, Popconfirm, Space, Input } from 'antd';
-import { UserOutlined, PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
+import { Button, Table, Avatar, App, Space, Input } from 'antd';
+import { UserOutlined, PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, LockOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 import { useRouter } from "next/navigation";
-import { getAvatarUrl, listStaffAccounts, deleteStaff } from "@/lib/api";
+import { getAvatarUrl, listStaffAccounts, deleteStaff, toggleStaffActive } from "@/lib/api";
 import CreateStaffModal from '@/lib/components/popup/CreateStaffModal';
 import EditStaffModal from '@/lib/components/popup/EditStaffModal';
 import VerifyPasswordModal from '@/lib/components/popup/VerifyPasswordModal';
@@ -58,6 +58,7 @@ export default function MembersPermissionsPage() {
 					name: staff.name,
 					username: staff.username,
 					phone: staff.phoneNumber || "",
+					is_active: typeof staff.is_active === 'undefined' ? true : !!staff.is_active,
 				}));
 				setStaffList(formatted);
 			} else {
@@ -123,12 +124,36 @@ export default function MembersPermissionsPage() {
 			render: (text, record) => (
 				<div>
 					<div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-						<Avatar
-							size={40}
-							src={record.avatar ? getAvatarUrl(record.avatar) : null}
-							icon={!record.avatar && <UserOutlined />}
-							style={{ background: '#d9d9d9' }}
-						/>
+						{/* START OVERLAY LOGIC */}
+						<div style={{ position: 'relative', display: 'inline-block' }}>
+							<Avatar
+								size={40}
+								src={record.avatar ? getAvatarUrl(record.avatar) : null}
+								icon={!record.avatar && <UserOutlined />}
+								style={{
+									background: '#d9d9d9',
+									opacity: record.is_active ? 1 : 0.6 // Dim the avatar if locked
+								}}
+							/>
+							{!record.is_active && (
+								<div style={{
+									position: 'absolute',
+									top: 0,
+									left: 0,
+									width: '100%',
+									height: '100%',
+									display: 'flex',
+									alignItems: 'center',
+									justifyContent: 'center',
+									background: 'rgba(0, 0, 0, 0.4)', // Dark overlay
+									borderRadius: '50%',
+									color: 'white',
+									fontSize: '16px'
+								}}>
+									<LockOutlined />
+								</div>
+							)}
+						</div>
 						<div>
 							<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
 								<span style={{ fontWeight: '500', fontSize: '14px' }}>
@@ -173,6 +198,36 @@ export default function MembersPermissionsPage() {
 					/>
 				</Space>
 			)
+		},
+		{
+			title: 'Trạng thái',
+			dataIndex: 'is_active',
+			key: 'status',
+			align: 'center',
+			render: (_, record) => (
+				<Button
+					type={record.is_active ? 'default' : 'primary'}
+					size="small"
+					style={record.is_active ? { background: '#fff' } : { background: '#52c41a', color: 'white', borderColor: '#52c41a' }}
+					onClick={async () => {
+						try {
+							const newState = !record.is_active;
+							const res = await toggleStaffActive(record.id, newState);
+							if (res.success) {
+								message.success(newState ? 'Mở khóa tài khoản thành công' : 'Đã khóa tài khoản thành công');
+								await loadStaffList();
+							} else {
+								message.error(res.message || 'Cập nhật trạng thái thất bại');
+							}
+						} catch (e) {
+							console.error('Toggle active failed', e);
+							message.error('Cập nhật trạng thái thất bại');
+						}
+					}}
+				>
+					{record.is_active ? 'Khóa' : 'Mở khóa'}
+				</Button>
+			),
 		},
 		{
 			title: 'Hành động',

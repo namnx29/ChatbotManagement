@@ -104,16 +104,17 @@ def init_auth_routes(mongo_client):
             # If not found by email, try to find by username (staff users)
             if not user:
                 # For username, we need parent_account_id from the request
-                parent_account_id = data.get('parentAccountId', '')
-                if parent_account_id:
-                    user = user_model.find_by_username(email_or_username, parent_account_id)
+                # parent_account_id = data.get('parentAccountId', '')
+                # if parent_account_id:
+                user = user_model.find_by_username(email_or_username)
             
             if not user:
                 return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
             
+            role = user.get('role', 'admin')
             # Verify password
-            if not user_model.verify_password(user, password):
-                return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+            if not user_model.verify_password(user, password, role):
+                return jsonify({'success': False, 'message': 'Password is incorrect'}), 401
             
             # Check if email is verified (for admin users only)
             if user.get('role') == 'admin' and not user.get('is_verified', False):
@@ -122,6 +123,10 @@ def init_auth_routes(mongo_client):
                     'email': user.get('email'),
                     'code': 'UNVERIFIED',
                 }), 403
+
+            # Check if account is active
+            if not user.get('is_active', True):
+                return jsonify({'success': False, 'message': 'Account is disabled'}), 403
 
             # Login the user using Flask-Login session management
             from flask_login import login_user

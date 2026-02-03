@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+from flask import current_app
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +338,16 @@ class ConversationModel:
             conv_obj_id = conversation_id
         now = datetime.utcnow()
         expires_at = now + timedelta(seconds=int(ttl_seconds))
+
+        from models.user import UserModel
+        user_model = UserModel(current_app.mongo_client)
+        user_data = user_model.find_by_account_id(handler_account_id)
+
+        if user_data.get('role') == 'admin':
+        # If Admin, just fetch the conversation without setting a lock/handler
+            result = self.collection.find_one({'_id': conv_obj_id})
+            return self._serialize(result)
+        
         result = self.collection.find_one_and_update(
             {'_id': conv_obj_id, '$or': [{'current_handler': None}, {'lock_expires_at': {'$lte': now}}]},
             {
@@ -368,6 +379,16 @@ class ConversationModel:
         except Exception:
             conv_obj_id = conversation_id
         now = datetime.utcnow()
+
+        from models.user import UserModel
+        user_model = UserModel(current_app.mongo_client)
+        user_data = user_model.find_by_account_id(handler_account_id)
+
+        if user_data.get('role') == 'admin':
+        # If Admin, just fetch the conversation without setting a lock/handler
+            result = self.collection.find_one({'_id': conv_obj_id})
+            return self._serialize(result)
+
         result = self.collection.find_one_and_update(
             {
                 '_id': conv_obj_id,

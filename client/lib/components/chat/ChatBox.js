@@ -81,26 +81,41 @@ const getRawDate = (msg) => {
 };
 
 export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange, onConversationUpdate, socket, accountId }) {
-	const { message } = App.useApp();
+	const { modal, message } = App.useApp();
 	const [ChatMessage, setChatMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(true);
 	const [messages, setMessages] = useState(conversation.messages || []);
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const [hasNewMessages, setHasNewMessages] = useState(false);
-	const [isAtBottom, setIsAtBottom] = useState(true);
 	const [nameModalVisible, setNameModalVisible] = useState(false);
 	const [showSidebar, setShowSidebar] = useState(false);
-	// Request-access cooldown (prevent spamming)
-	const [requestCooldown, setRequestCooldown] = useState(false);
-	const requestCooldownRef = useRef(null);
+
 	// Handler modal state when someone requests access
 	const [requestModalVisible, setRequestModalVisible] = useState(false);
 	const [requestModalRequester, setRequestModalRequester] = useState(null);
+	const [requesterName, setRequesterName] = useState(null);
+	const [countdown, setCountdown] = useState(0);
+	const timerRef = useRef(null);
+
+	// Cleanup timer on unmount
+	useEffect(() => {
+		return () => {
+			if (timerRef.current) {
+				clearInterval(timerRef.current);
+			}
+		};
+	}, []);
 
 	// Lock/handler info
+	const role = localStorage.getItem('userRole');
 	const currentHandler = conversation?.current_handler || null;
 	const isHandler = !!(currentHandler && currentHandler.accountId && accountId && String(currentHandler.accountId) === String(accountId));
-	const isLocked = !!(currentHandler && currentHandler.accountId && !isHandler);
+	const isLocked = !!(currentHandler && currentHandler.accountId && !isHandler && role !== 'admin');
+
+
+	const handler = conversation.current_handler;
+	const startTime = handler?.started_at ? dayjs(handler.started_at).format('HH:mm') : null;
+	const title = isHandler ? 'Bạn đang xử lý cuộc hội thoại.' : `${handler?.name} đang xử lý cuộc hội thoại từ ${startTime}.`;
 
 	// Typing debounce management
 	const typingRef = useRef(false);
@@ -134,8 +149,9 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 				if (payload.conv_id !== conversation.id) return;
 				try {
 					const result = await fetchProfile(payload.requester);
-					setRequestModalRequester(result.data.name);
-        } catch (e) { }
+					setRequestModalRequester(payload.requester);
+					setRequesterName(result.data.name || 'Người dùng');
+				} catch (e) { }
 				setRequestModalVisible(true);
 			} catch (e) {
 				// ignore
@@ -159,7 +175,9 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 		return () => {
 			socket.off('request-access', onRequestAccess);
 			socket.off('request-access-response', onRequestAccessResponse);
-			if (requestCooldownRef.current) clearTimeout(requestCooldownRef.current);
+			if (timerRef.current) {
+				clearInterval(timerRef.current);
+			}
 		};
 	}, [socket, isHandler, conversation.id]);
 
@@ -201,25 +219,30 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 	const handleRequestAccess = () => {
 		if (!socket || !accountId) return;
 
-		// If current user is the handler, treat button as "End session"
 		if (isHandler) {
-			// End session: ask server to complete/unlock conversation
 			socket.emit('complete-conversation', { account_id: accountId, conv_id: conversation.id });
-			try { message.success('Đã kết thúc phiên xử lý cuộc trò chuyện'); } catch (e) { }
+			message.success('Đã kết thúc phiên xử lý');
 			return;
 		}
 
-		// Non-handler: request access flow with client-side cooldown
-		if (requestCooldown) {
-			try { message.warn('Bạn đã gửi yêu cầu gần đây, vui lòng chờ trước khi gửi lại.'); } catch (e) { }
-			return;
-		}
+		// Check if countdown is active
+		if (countdown > 0) return;
 
+		// Emit event
 		socket.emit('request-access', { account_id: accountId, conv_id: conversation.id });
-		setRequestCooldown(true);
-		// 30s cooldown
-		requestCooldownRef.current = setTimeout(() => setRequestCooldown(false), 30000);
-		try { message.alert('Yêu cầu quyền truy cập đã được gửi tới người xử lý.'); } catch (e) { }
+		message.info('Yêu cầu quyền truy cập đã được gửi.');
+
+		// Start 30s Countdown
+		setCountdown(30);
+		timerRef.current = setInterval(() => {
+			setCountdown((prev) => {
+				if (prev <= 1) {
+					clearInterval(timerRef.current);
+					return 0;
+				}
+				return prev - 1;
+			});
+		}, 1000);
 	};
 
 	const platformStatus = conversation.platform_status || { is_connected: true, disconnected_at: null };
@@ -262,7 +285,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 			const delta = el.scrollHeight - prevScrollHeightRef.current;
 			el.scrollTop = delta;
 			isPrependingRef.current = false;
-		} else if (messages.length > 0 && !conversation.loadingMore && !showScrollButton) {
+		} else if (messages.length > 0 && !conversation.loadingMore && !showScrollButton && title) {
 			el.scrollTop = el.scrollHeight;
 		}
 	}, [messages]);
@@ -272,13 +295,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 
 		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
 		setShowScrollButton(!atBottom);
-		setIsAtBottom(atBottom);
 
 		if (onScrollPositionChange) {
 			onScrollPositionChange(atBottom);
 		}
 
-		if (el.scrollTop <= 5 && !conversation.loadingMore && conversation.hasMore) {
+		if (el.scrollTop <= 5 && !conversation.loadingMore && conversation.hasMore && title) {
 			isPrependingRef.current = true;
 			prevScrollHeightRef.current = el.scrollHeight;
 
@@ -377,6 +399,30 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 		}
 	};
 
+	const handleResetSession = () => {
+		modal.confirm({
+			title: 'Xác nhận mở khóa',
+			content: 'Bạn có chắc chắn muốn mở khóa cuộc hội thoại này? Hành động này sẽ gỡ bỏ người xử lý hiện tại ngay lập tức.',
+			okText: 'Mở khóa',
+			okType: 'danger',
+			cancelText: 'Hủy',
+			onOk: () => {
+				if (socket && accountId) {
+					// We use 'complete-conversation' to unlock it
+					socket.emit('complete-conversation', {
+						account_id: accountId,
+						conv_id: conversation.id
+					});
+					message.success('Đã reset trạng thái cuộc trò chuyện');
+					if (timerRef.current) {
+						clearInterval(timerRef.current);
+						setCountdown(0);
+					}
+				}
+			},
+		});
+	};
+
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
 			{/* Header - Full Width */}
@@ -446,28 +492,51 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 						okText="Chấp nhận và kết thúc phiên"
 						cancelText="Từ chối"
 					>
-						<p>Người dùng <strong>{requestModalRequester}</strong> đang yêu cầu quyền kết thúc phiên này. Bạn có muốn chấp nhận và kết thúc phiên không?</p>
+						<p>Người dùng <strong>{requesterName}</strong> đang yêu cầu quyền xử lý đoạn chat này. Bạn có muốn chấp nhận và kết thúc phiên không?</p>
 					</Modal>
 				</div>
 
 				<div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
 					<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-						{isHandler ? (
-							<Button size="default" style={{
-								background: '#ff4d4f',
-								borderColor: '#ff4d4f',
-								color: 'white',
-							}} onClick={handleRequestAccess}>Kết thúc phiên</Button>
-						) : (
-							// Only show request button when conversation is currently handled by someone else
-							conversation.current_handler ? (
-								<Button size="default" style={{
-									background: '#6c3fb5',
-									borderColor: '#6c3fb5',
-									color: 'white',
-								}} onClick={handleRequestAccess} disabled={!isLocked}>{requestCooldown ? 'Đã gửi yêu cầu' : 'Yêu cầu quyền chat'}</Button>
-							) : null
-						)}
+						<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+							{/* 1. ADMIN FLOW */}
+							{role === 'admin' && conversation.current_handler ? (
+								<Button
+									size="default"
+									danger
+									type="primary"
+									onClick={handleResetSession}
+								>
+									Mở khóa chat
+								</Button>
+							) : (
+								/* 2. HANDLER FLOW (Existing) */
+								isHandler ? (
+									<Button size="default" style={{
+										background: '#ff4d4f',
+										borderColor: '#ff4d4f',
+										color: 'white',
+									}} onClick={handleRequestAccess}>Kết thúc</Button>
+								) : (
+									/* 3. REQUEST ACCESS FLOW (Existing) */
+									conversation.current_handler ? (
+										<Button
+											size="default"
+											style={{
+												background: '#6c3fb5',
+												borderColor: '#6c3fb5',
+												color: 'white',
+												opacity: (countdown > 0 || !isLocked) ? 0.7 : 1
+											}}
+											onClick={handleRequestAccess}
+											disabled={!isLocked || countdown > 0}
+										>
+											{countdown > 0 ? `(${countdown}s) Đã gửi yêu cầu` : 'Yêu cầu xử lý'}
+										</Button>
+									) : null
+								)
+							)}
+						</div>
 						<RobotOutlined style={{ fontSize: '18px', color: autoReply ? '#6c3fb5' : '#999' }} />
 						<span style={{ fontSize: '14px', marginRight: '4px' }}>Auto-reply</span>
 						<Switch
@@ -485,15 +554,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 
 			{conversation.current_handler && (
 				(() => {
-					const handler = conversation.current_handler;
-					const isHandledByOwner = handler && conversation.accountId && String(handler.accountId) === String(conversation.accountId);
-					const title = isHandler ? 'Bạn đang xử lý cuộc trò chuyện' : (isHandledByOwner ? 'Quản trị viên đang xử lý cuộc trò chuyện' : `${handler.name} đang xử lý cuộc trò chuyện`);
 					return (
 						<Alert
 							title={title}
 							type="info"
 							showIcon
-							style={{ margin: '8px 16px' }}
+							style={{ borderRadius: 0, border: 'none', height: '40px' }}
 						/>
 					);
 				})()

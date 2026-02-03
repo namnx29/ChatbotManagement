@@ -19,7 +19,6 @@ import {
   sendZaloConversationMessage,
   sendZaloConversationAttachment,
   markZaloConversationRead,
-  fetchProfile,
 } from '@/lib/api';
 import ChatBox from '@/lib/components/chat/ChatBox';
 import ConversationItem from '@/lib/components/chat/ConversationItem';
@@ -380,23 +379,7 @@ export default function ChatManagementPage() {
       }
     };
 
-    const handleRequestAccess = async (payload) => {
-      // If you receive request-access (as handler), show a notification
-      const convId = payload.conv_id;
-      if (payload.requester && selectedChat?.id === convId) {
-        try {
-          const result = await fetchProfile(payload.requester);
-          if (result.success && result.data) {
-            message.info(`Người dùng ${result.data.name} yêu cầu quyền truy cập`);
-          }
-        } catch (e) { }
-      }
-    };
-
-    // const handleLockFailed = (payload) => {
-    //   try { message.error(`Cuộc trò chuyện đang được xử lý bởi ${payload.current_handler?.name || 'ai đó'}`); } catch (e) { }
-    // };
-    const handleForceLogout = (payload) => {
+    const handleForceLogout = () => {
       try { message.info('Tài khoản đã bị xóa. Bạn sẽ được đăng xuất.'); } catch (e) { }
       setTimeout(() => {
         try { localStorage.clear(); sessionStorage.clear(); } catch (e) { }
@@ -445,20 +428,16 @@ export default function ChatManagementPage() {
 
     socket.on('conversation-locked', handleLocked);
     socket.on('conversation-unlocked', handleUnlocked);
-    socket.on('request-access', handleRequestAccess);
     socket.on('force-logout', handleForceLogout);
     socket.on('integration-added', handleIntegrationAdded);
     socket.on('integration-removed', handleIntegrationRemoved);
-    // socket.on('lock-failed', handleLockFailed);
 
     return () => {
       socket.off('conversation-locked', handleLocked);
       socket.off('conversation-unlocked', handleUnlocked);
-      socket.off('request-access', handleRequestAccess);
       socket.off('force-logout', handleForceLogout);
       socket.off('integration-added', handleIntegrationAdded);
       socket.off('integration-removed', handleIntegrationRemoved);
-      // socket.off('lock-failed', handleLockFailed);
     };
   }, [selectedChat?.id, message]);
 
@@ -529,9 +508,10 @@ export default function ChatManagementPage() {
       }
 
       const msgs = (res?.data || []).map(mapMessageDocToClient);
+      const convMeta = res?.conversation || conversation;
 
       // Mark as read in sidebar
-      updateConversationInList(conversation.id, { isUnread: false });
+      updateConversationInList(conversation.id, { isUnread: false, current_handler: convMeta.current_handler || null, lock_expires_at: convMeta.lock_expires_at || null });
 
       setSelectedChat({
         ...conversation,
@@ -541,6 +521,8 @@ export default function ChatManagementPage() {
         skip: msgs.length,
         limit: MESSAGE_LIMIT,
         hasMore: msgs.length === MESSAGE_LIMIT,
+        current_handler: convMeta.current_handler || null,
+        lock_expires_at: convMeta.lock_expires_at || null,
       });
 
       // Persist selection
@@ -586,6 +568,7 @@ export default function ChatManagementPage() {
       }
 
       const newMsgs = (res?.data || []).map(mapMessageDocToClient);
+      const convMeta = res?.conversation;
 
       // Prepend older messages
       setSelectedChat(prev => ({
@@ -594,6 +577,8 @@ export default function ChatManagementPage() {
         skip: (prev.skip || 0) + newMsgs.length,
         hasMore: newMsgs.length === (prev.limit || MESSAGE_LIMIT),
         loadingMore: false,
+        current_handler: (convMeta && convMeta.current_handler) ? convMeta.current_handler : prev.current_handler,
+        lock_expires_at: (convMeta && convMeta.lock_expires_at) ? convMeta.lock_expires_at : prev.lock_expires_at,
       }));
 
       return newMsgs;

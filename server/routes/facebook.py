@@ -786,6 +786,8 @@ def list_conversations():
                 'lastMessage': last_msg.get('text'),
                 'time': time_value or c.get('updated_at'),  # Fallback to updated_at if no last_message time
                 'unreadCount': c.get('unread_count', 0),
+                'current_handler': c.get('current_handler'),
+                'lock_expires_at': c.get('lock_expires_at') if c.get('lock_expires_at') else None,
             })
         else:
             # Legacy format (already converted above)
@@ -868,7 +870,7 @@ def get_conversation_messages(conv_id):
         message_model = MessageModel(current_app.mongo_client)
         user_model = UserModel(current_app.mongo_client)
         
-        # Try to find conversation to get conversation_id
+        # Try to find conversation to get conversation_id and return conversation state
         # Use organizationId for org-level isolation
         customer_id = f"facebook:{sender_id}"
         user_org_id = user_model.get_user_organization_id(account_id)
@@ -906,14 +908,16 @@ def get_conversation_messages(conv_id):
         return jsonify({'success': False, 'message': 'Internal error fetching messages'}), 500
 
     # Defensive: ensure messages are JSON-serializable before returning
+    payload = {'success': True, 'data': msgs, 'conversation': conversation_doc}
     try:
-        return jsonify({'success': True, 'data': msgs}), 200
+        return jsonify(payload), 200
     except TypeError as e:
         logger.warning(f"Messages not JSON serializable, attempting to normalize: {e}")
         try:
             import json
             safe_msgs = json.loads(json.dumps(msgs, default=str))
-            return jsonify({'success': True, 'data': safe_msgs}), 200
+            safe_conv = json.loads(json.dumps(conversation_doc, default=str)) if conversation_doc else None
+            return jsonify({'success': True, 'data': safe_msgs, 'conversation': safe_conv}), 200
         except Exception as e2:
             logger.error(f"Failed to normalize messages for JSON response: {e2}")
             return jsonify({'success': False, 'message': 'Internal error formatting messages'}), 500

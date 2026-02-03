@@ -380,7 +380,7 @@ export default function ChatManagementPage() {
     };
 
     const handleForceLogout = () => {
-      try { message.info('Tài khoản đã bị xóa. Bạn sẽ được đăng xuất.'); } catch (e) { }
+      try { message.info('Tài khoản đã bị khóa hoặc xóa khỏi hệ thống. Bạn sẽ được đăng xuất.'); } catch (e) { }
       setTimeout(() => {
         try { localStorage.clear(); sessionStorage.clear(); } catch (e) { }
         window.location.href = '/login';

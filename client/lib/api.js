@@ -1117,3 +1117,28 @@ export async function getStaffPassword(staffAccountId, verificationToken) {
     throw error;
   }
 }
+
+export async function toggleStaffActive(staffAccountId, isActive) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const response = await fetch(`${API_BASE_URL}/api/user/staff/${encodeURIComponent(staffAccountId)}/active`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ is_active: !!isActive }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /user/staff/:id/active]:', error);
+    throw error;
+  }
+}

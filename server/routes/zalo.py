@@ -1046,6 +1046,8 @@ def list_conversations():
                     'lastMessage': c.get('lastMessage'),
                     'time': c.get('time'),
                     'unreadCount': c.get('unreadCount'),
+                    'current_handler': c.get('current_handler') if isinstance(c, dict) else None,
+                    'lock_expires_at': c.get('lock_expires_at') if isinstance(c, dict) and c.get('lock_expires_at') else None,
                 })
     except Exception as e:
         logger.error(f"Failed to fetch conversations from new structure: {e}", exc_info=True)
@@ -1129,6 +1131,8 @@ def list_conversations():
                 'lastMessage': last_msg.get('text'),
                 'time': time_value or c.get('updated_at'),
                 'unreadCount': c.get('unread_count', 0),
+                'current_handler': c.get('current_handler'),
+                'lock_expires_at': c.get('lock_expires_at') if c.get('lock_expires_at') else None,
             })
         else:
             out.append(c)
@@ -1268,14 +1272,32 @@ def get_conversation_messages(conv_id):
         logger.error(f"Failed to fetch messages: {e}")
         return jsonify({'success': False, 'message': 'Internal error fetching messages'}), 500
 
+    # Ensure conversation_doc is serialized for client consumption
     try:
-        return jsonify({'success': True, 'data': msgs}), 200
+        if conversation_doc and isinstance(conversation_doc, dict):
+            try:
+                conversation_doc = conversation_model._serialize(conversation_doc)
+            except Exception:
+                # Fallback: stringify _id and leave other fields as-is
+                try:
+                    if conversation_doc.get('_id') and not isinstance(conversation_doc.get('_id'), str):
+                        conversation_doc['_id'] = str(conversation_doc.get('_id'))
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+    payload = {'success': True, 'data': msgs, 'conversation': conversation_doc}
+    try:
+        return jsonify(payload), 200
     except TypeError as e:
         logger.warning(f"Messages not JSON serializable, attempting to normalize: {e}")
         try:
             import json
             safe_msgs = json.loads(json.dumps(msgs, default=str))
-            return jsonify({'success': True, 'data': safe_msgs}), 200
+            payload['data'] = safe_msgs
+            return jsonify(payload), 200
         except Exception as e2:
             logger.error(f"Failed to normalize messages for JSON response: {e2}")
             return jsonify({'success': False, 'message': 'Internal error formatting messages'}), 500

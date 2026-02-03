@@ -164,18 +164,6 @@ def create_app(env=None):
             logger.error(f"Error in WebSocket connect handler: {e}", exc_info=True)
             return False  # Reject connection on error
 
-    # Socket event handlers for conversation locking
-    @app.socketio.on('start-typing')
-    def socket_start_typing(data):
-        # Typing events no longer acquire locks on the server.
-        # This handler is intentionally a no-op to prevent typing-based locking.
-        return
-
-    @app.socketio.on('stop-typing')
-    def socket_stop_typing(data):
-        # Typing stop is a no-op for lock management.
-        return
-
     @app.socketio.on('complete-conversation')
     def socket_complete_conversation(data):
         try:

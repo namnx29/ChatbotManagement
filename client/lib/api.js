@@ -1142,3 +1142,13 @@ export async function toggleStaffActive(staffAccountId, isActive) {
     throw error;
   }
 }
+
+export async function setConversationBotReply(platform, convId, enabled, accountId = null) {
+  if (!platform || !convId) throw new Error('Platform and conversation id required');
+  const endpoint = `/${platform}/conversations/${encodeURIComponent(convId)}/bot-reply`;
+  // If accountId provided, include it in headers via apiCall wrapper by attaching to endpoint query
+  // apiCall does not accept headers param, so include accountId in body? Better: append as query param so server picks it up.
+  // Use query param only when accountId provided to satisfy server check (it accepts header or query)
+  const ep = accountId ? `${endpoint}?accountId=${encodeURIComponent(accountId)}` : endpoint;
+  return apiCall('POST', ep, { enabled });
+}

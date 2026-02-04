@@ -9,9 +9,142 @@ import hashlib
 import requests
 import json
 from datetime import datetime, timedelta
+import threading
 
 zalo_bp = Blueprint('zalo', __name__)
 logger = logging.getLogger(__name__)
+
+# External auto-reply chat API (same as Facebook integration)
+EXTERNAL_CHAT_API = 'https://microtunchat-app-1012095270393.us-central1.run.app/chat'
+
+
+def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_id, conversation_id, question, account_id_owner, organization_id, socketio=None):
+    try:
+        if not question:
+            logger.debug('Auto-reply Zalo: empty question, skipping')
+            return
+        try:
+            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120)
+            data = resp.json() if resp.status_code == 200 else {}
+        except Exception as e:
+            logger.error(f'Auto-reply Zalo API request failed: {e}')
+            return
+
+        answer = data.get('answer') if isinstance(data, dict) else None
+        if not answer:
+            logger.info(f'Auto-reply Zalo: no answer from API for question: {question}')
+            return
+
+        # Send answer back to customer via Zalo send helper
+        try:
+            send_resp = _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text=answer)
+        except Exception as e:
+            logger.error(f'Failed to send auto-reply message to Zalo: {e}')
+            send_resp = {'error': str(e)}
+
+        # Persist outgoing message and update conversation
+        try:
+            from models.message import MessageModel
+            from models.conversation import ConversationModel
+            message_model = MessageModel(mongo_client)
+            conversation_model = ConversationModel(mongo_client)
+
+            sent_doc = message_model.add_message(
+                platform='zalo',
+                oa_id=oa_id,
+                sender_id=customer_platform_id,
+                direction='out',
+                text=answer,
+                metadata={'auto_reply': True, 'source': 'external_api', 'api_response': send_resp},
+                is_read=True,
+                conversation_id=conversation_id,
+                account_id=account_id_owner,
+                organization_id=organization_id,
+            )
+
+            conversation_model.upsert_conversation(
+                oa_id=oa_id,
+                customer_id=f"zalo:{customer_platform_id}",
+                last_message_text=answer,
+                last_message_created_at=datetime.utcnow(),
+                direction='out',
+                account_id=account_id_owner,
+                organization_id=organization_id,
+            )
+        except Exception as e:
+            logger.error(f'Failed to persist auto-reply message for Zalo: {e}')
+
+        # Emit socket events to account and organization rooms
+        try:
+            try:
+                conversation_doc = conversation_model.find_by_oa_and_customer(oa_id, f"zalo:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
+            except Exception:
+                conversation_doc = None
+
+            org_fallback = organization_id or (conversation_doc.get('organizationId') if conversation_doc else None)
+
+            payload = {
+                'platform': 'zalo',
+                'oa_id': oa_id,
+                'sender_id': customer_platform_id,
+                'message': answer,
+                'message_doc': sent_doc if 'sent_doc' in locals() else None,
+                'conv_id': f"zalo:{oa_id}:{customer_platform_id}",
+                'conversation_id': conversation_id,
+                'sent_at': datetime.utcnow().isoformat() + 'Z',
+                'direction': 'out',
+            }
+            try:
+                if socketio:
+                    acc_room = f"account:{str(account_id_owner)}"
+                    socketio.emit('new-message', payload, room=acc_room)
+                    if org_fallback:
+                        org_room = f"organization:{str(org_fallback)}"
+                        socketio.emit('new-message', payload, room=org_room)
+
+                    socketio.emit('update-conversation', {
+                        'conversation_id': conversation_id,
+                        'conv_id': f"zalo:{oa_id}:{customer_platform_id}",
+                        'oa_id': oa_id,
+                        'customer_id': f"zalo:{customer_platform_id}",
+                        'last_message': {'text': answer, 'created_at': datetime.utcnow().isoformat() + 'Z'},
+                        'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
+                        'customer_info': conversation_doc.get('customer_info', {}) if conversation_doc else {},
+                        'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
+                        'platform': 'zalo',
+                    }, room=acc_room)
+                    if org_fallback:
+                        org_room = f"organization:{str(org_fallback)}"
+                        socketio.emit('update-conversation', {
+                            'conversation_id': conversation_id,
+                            'conv_id': f"zalo:{oa_id}:{customer_platform_id}",
+                            'oa_id': oa_id,
+                            'customer_id': f"zalo:{customer_platform_id}",
+                            'last_message': {'text': answer, 'created_at': datetime.utcnow().isoformat() + 'Z'},
+                            'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
+                            'customer_info': conversation_doc.get('customer_info', {}) if conversation_doc else {},
+                            'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
+                            'platform': 'zalo',
+                        }, room=org_room)
+                else:
+                    _emit_socket_to_account('new-message', payload, account_id_owner, org_fallback)
+                    _emit_socket_to_account('update-conversation', {
+                        'conversation_id': conversation_id,
+                        'conv_id': f"zalo:{oa_id}:{customer_platform_id}",
+                        'oa_id': oa_id,
+                        'customer_id': f"zalo:{customer_platform_id}",
+                        'last_message': {'text': answer, 'created_at': datetime.utcnow().isoformat() + 'Z'},
+                        'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
+                        'customer_info': conversation_doc.get('customer_info', {}) if conversation_doc else {},
+                        'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
+                        'platform': 'zalo',
+                    }, account_id_owner, org_fallback)
+            except Exception as e:
+                logger.debug(f"Socket emit from auto-reply Zalo failed: {e}")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f'Auto-reply worker Zalo exception: {e}')
 
 class ImageTooLargeError(Exception):
     """Raised when an image exceeds the configured upload size limit."""
@@ -30,7 +163,8 @@ def _emit_socket_to_account(event, payload, account_id, organization_id=None):
             return False
         
         emitted_rooms = []
-        room = f"account:{account_id}"
+        acc_str = str(account_id)
+        room = f"account:{acc_str}"
         try:
             socketio.emit(event, payload, room=room)
         except TypeError:
@@ -40,7 +174,8 @@ def _emit_socket_to_account(event, payload, account_id, organization_id=None):
 
         # Also emit to organization room so staff receive events
         if organization_id:
-            org_room = f"organization:{organization_id}"
+            org_str = str(organization_id)
+            org_room = f"organization:{org_str}"
             try:
                 socketio.emit(event, payload, room=org_room)
             except TypeError:
@@ -719,14 +854,105 @@ def webhook_event():
                 'unread_count': conversation_doc.get('unread_count', 0),
                 'customer_info': conversation_doc.get('customer_info', {}),
                 'platform': 'zalo',
+                'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
             }, account_id_owner, integration.get('organizationId'))
-            logger.info(f'Emitted update-conversation to account {account_id_owner} and org {integration.get("organizationId")} via socket')
+            logger.info(f"Emitted update-conversation to account {account_id_owner} and org {integration.get('organizationId')} via socket")
+            # If auto-reply enabled for this conversation, schedule background worker
+            try:
+                bot_flag = conversation_doc.get('bot_reply') if conversation_doc else None
+                if bot_flag is None:
+                    bot_flag = conversation_doc.get('bot-reply') if conversation_doc else None
+
+                if direction == 'in' and bot_flag and not deduped:
+                    try:
+                        mongo_client = current_app.mongo_client
+                        socketio = getattr(current_app, 'socketio', None)
+                        t = threading.Thread(
+                            target=_auto_reply_worker_zalo,
+                            args=(mongo_client, integration, integration.get('oa_id'), customer_platform_id, conversation_id, message, account_id_owner, integration.get('organizationId'), socketio),
+                            daemon=True
+                        )
+                        t.start()
+                        logger.info(f"Scheduled Zalo auto-reply worker for conversation {conversation_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to start Zalo auto-reply worker thread: {e}")
+            except Exception:
+                pass
         else:
             logger.info('Deduped outgoing echo; skipping socket emits')
     except Exception as e:
         logger.error(f"Failed to emit socket event: {e}")
 
     return jsonify({'success': True}), 200
+
+
+@zalo_bp.route('/api/zalo/conversations/<path:conv_id>/bot-reply', methods=['POST'])
+def set_conversation_bot_reply_zalo(conv_id):
+    """Toggle auto-reply for a Zalo conversation. Expects JSON: {"enabled": true/false}"""
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+
+    parts = conv_id.split(':')
+    if len(parts) != 3:
+        return jsonify({'success': False, 'message': 'Invalid conversation id'}), 400
+    platform, oa_id, sender_id = parts
+    if platform != 'zalo':
+        return jsonify({'success': False, 'message': 'Unsupported platform'}), 400
+
+    data = request.get_json() or {}
+    enabled = data.get('enabled')
+    enabled_bool = True if enabled in [True, 'true', 'True', 1, '1'] else False
+
+    try:
+        from models.conversation import ConversationModel
+        from models.user import UserModel
+
+        model = IntegrationModel(current_app.mongo_client)
+        user_model = UserModel(current_app.mongo_client)
+        integration = model.find_by_platform_and_oa('zalo', oa_id)
+        if not integration:
+            # Try meta.profile.oa_id fallback
+            raw = model.collection.find_one({'platform': 'zalo', 'meta.profile.oa_id': oa_id})
+            if raw:
+                integration = model._serialize(raw)
+        if not integration:
+            return jsonify({'success': False, 'message': 'Integration not found'}), 404
+
+        # Authorization check
+        user_org_id = user_model.get_user_organization_id(account_id)
+        integration_org_id = integration.get('organizationId')
+        if integration_org_id and user_org_id and integration_org_id == user_org_id:
+            pass
+        elif integration.get('accountId') == account_id:
+            pass
+        else:
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+
+        conversation_model = ConversationModel(current_app.mongo_client)
+        customer_id = f"zalo:{sender_id}"
+        conv = conversation_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=user_org_id, account_id=account_id)
+        if not conv:
+            return jsonify({'success': False, 'message': 'Conversation not found'}), 404
+
+        updated = conversation_model.set_bot_reply_by_id(conv.get('_id'), enabled_bool, account_id=integration.get('accountId'), organization_id=integration.get('organizationId'))
+        # Emit update so other clients (account owner and org members) get realtime state
+        try:
+            conv_id_legacy = f"zalo:{oa_id}:{sender_id}"
+            org_fallback = integration.get('organizationId') or conv.get('organizationId')
+            _emit_socket_to_account('update-conversation', {
+                'conversation_id': conv.get('_id'),
+                'conv_id': conv_id_legacy,
+                'oa_id': oa_id,
+                'customer_id': f"zalo:{sender_id}",
+                'bot_reply': updated.get('bot_reply') if updated and 'bot_reply' in updated else enabled_bool,
+            }, integration.get('accountId'), org_fallback)
+        except Exception as e:
+            logger.debug(f"Failed to emit bot-reply update for Zalo: {e}")
+        return jsonify({'success': True, 'data': updated}), 200
+    except Exception as e:
+        logger.error(f"Failed to set bot-reply for Zalo conversation {conv_id}: {e}")
+        return jsonify({'success': False, 'message': 'Internal error setting bot reply'}), 500
 
 def _upload_image_to_zalo(access_token, image_data):
     """
@@ -1133,6 +1359,7 @@ def list_conversations():
                 'unreadCount': c.get('unread_count', 0),
                 'current_handler': c.get('current_handler'),
                 'lock_expires_at': c.get('lock_expires_at') if c.get('lock_expires_at') else None,
+                'bot_reply': c.get('bot-reply') if 'bot-reply' in c else (c.get('bot_reply') if 'bot_reply' in c else None),
             })
         else:
             out.append(c)

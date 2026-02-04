@@ -59,7 +59,7 @@ def activate_integration(integration_id):
     updated = model.set_active(integration_id, True)
     if not updated:
         return jsonify({'success': False, 'message': 'Not found or not authorized'}), 404
-
+    
     # Emit integration-added to notify staff/admin
     try:
         socketio = getattr(current_app, 'socketio', None)
@@ -106,7 +106,8 @@ def deactivate_integration(integration_id):
     updated = model.set_active(integration_id, False)
     if not updated:
         return jsonify({'success': False, 'message': 'Not found or not authorized'}), 404
-
+    
+    
     # Emit integration-removed to notify staff/admin
     try:
         socketio = getattr(current_app, 'socketio', None)
@@ -124,7 +125,7 @@ def deactivate_integration(integration_id):
                 socketio.emit('integration-removed', payload, room=f"account:{owner_account}")
     except Exception as e:
         logger.error(f"Emit integration-removed failed: {str(e)}")
-
+        
     return jsonify({'success': True, 'data': updated}), 200
 
 
@@ -154,7 +155,8 @@ def delete_integration(integration_id):
     deleted = model.delete_integration(integration_id)
     if not deleted:
         return jsonify({'success': False, 'message': 'Delete failed'}), 500
-
+    
+    
     # Notify organization members and owner account that this integration was removed
     try:
         socketio = getattr(current_app, 'socketio', None)
@@ -297,6 +299,7 @@ def get_all_conversations():
                     'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
                     'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
                     'unreadCount': conv.get('unread_count', 0),
+                    'bot_reply': conv.get('bot-reply') if 'bot-reply' in conv else (conv.get('bot_reply') if 'bot_reply' in conv else None),
                     'platform_status': {
                         'is_connected': is_connected,
                         'disconnected_at': disconnected_at.isoformat() + 'Z' if disconnected_at else None

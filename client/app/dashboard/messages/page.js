@@ -426,11 +426,49 @@ export default function ChatManagementPage() {
       try { message.success(`Nền tảng ${platform || ''} đã được kết nối`); } catch (e) { }
     };
 
+
+    const handleUpdateConversation = (payload) => {
+      try {
+        const convId = payload.conv_id || payload.convId || payload.convIdLegacy || null;
+        // Update sidebar list
+        setConversations(prev => prev.map(c => {
+          if (!convId || c.id !== convId) return c;
+          const updated = { ...c };
+          if (payload.last_message && payload.last_message.text !== undefined) {
+            updated.lastMessage = payload.last_message.text;
+            updated.time = payload.last_message.created_at || payload.time || updated.time;
+          }
+          if (payload.unread_count !== undefined) {
+            updated.isUnread = (payload.unread_count || 0) > 0;
+          }
+          if (payload.bot_reply !== undefined) {
+            updated.bot_reply = payload.bot_reply;
+          } else if (payload['bot-reply'] !== undefined) {
+            updated.bot_reply = payload['bot-reply'];
+          }
+          return updated;
+        }));
+
+        // Update selected chat if open
+        if (selectedChat?.id && (payload.conv_id === selectedChat.id || (payload.conv_id && payload.conv_id === selectedChat.id))) {
+          setSelectedChat(prev => prev ? {
+            ...prev,
+            lastMessage: payload.last_message?.text || prev.lastMessage,
+            time: payload.last_message?.created_at || prev.time,
+            bot_reply: payload.bot_reply !== undefined ? payload.bot_reply : (payload['bot-reply'] !== undefined ? payload['bot-reply'] : prev.bot_reply)
+          } : prev);
+        }
+      } catch (e) {
+        console.error('Failed to handle update-conversation socket event:', e);
+      }
+    };
+
     socket.on('conversation-locked', handleLocked);
     socket.on('conversation-unlocked', handleUnlocked);
     socket.on('force-logout', handleForceLogout);
     socket.on('integration-added', handleIntegrationAdded);
     socket.on('integration-removed', handleIntegrationRemoved);
+    socket.on('update-conversation', handleUpdateConversation);
 
     return () => {
       socket.off('conversation-locked', handleLocked);
@@ -438,6 +476,7 @@ export default function ChatManagementPage() {
       socket.off('force-logout', handleForceLogout);
       socket.off('integration-added', handleIntegrationAdded);
       socket.off('integration-removed', handleIntegrationRemoved);
+      socket.off('update-conversation', handleUpdateConversation);
     };
   }, [selectedChat?.id, message]);
 
@@ -465,7 +504,8 @@ export default function ChatManagementPage() {
           current_handler: c.current_handler || null,
           lock_expires_at: c.lock_expires_at || null,
           platform_status: c.platform_status || { is_connected: true, disconnected_at: null },
-          chatbot_info: c.chatbot_info || {}
+          chatbot_info: c.chatbot_info || {},
+          bot_reply: c.bot_reply || null,
         }));
 
         const sortedConversations = allConversations.sort((a, b) => {

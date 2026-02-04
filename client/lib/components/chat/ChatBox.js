@@ -15,7 +15,7 @@ import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import CustomerNameChangeModal from '@/lib/components/popup/CustomerNameChangeModal';
-import { getAvatarUrl, fetchProfile } from '@/lib/api';
+import { getAvatarUrl, fetchProfile, setConversationBotReply } from '@/lib/api';
 
 dayjs.locale('vi');
 const { TextArea } = Input;
@@ -83,7 +83,24 @@ const getRawDate = (msg) => {
 export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange, onConversationUpdate, socket, accountId }) {
 	const { modal, message } = App.useApp();
 	const [ChatMessage, setChatMessage] = useState('');
-	const [autoReply, setAutoReply] = useState(true);
+	const [autoReply, setAutoReply] = useState(() => {
+		// initialize from conversation flag (support both snake and hyphen)
+		try {
+			if (conversation && conversation.bot_reply !== undefined) return !!conversation.bot_reply;
+		} catch (e) { }
+		return false;
+	});
+
+	// Keep autoReply in sync with conversation prop updates (realtime via socket)
+	useEffect(() => {
+		try {
+			if (!conversation) return;
+			if (conversation && conversation.bot_reply !== undefined) setAutoReply(!!conversation.bot_reply);
+		} catch (e) {
+			// ignore
+		}
+	}, [conversation]);
+
 	const [messages, setMessages] = useState(conversation.messages || []);
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const [hasNewMessages, setHasNewMessages] = useState(false);
@@ -541,7 +558,45 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 						<span style={{ fontSize: '14px', marginRight: '4px' }}>Auto-reply</span>
 						<Switch
 							checked={autoReply}
-							onChange={setAutoReply}
+							onChange={(val) => {
+								// Confirm before toggling
+								modal.confirm({
+									title: val ? 'Bật Auto-reply' : 'Tắt Auto-reply',
+									content: val ? 'Bạn có chắc chắn muốn bật Auto-reply cho cuộc hội thoại này? Bot sẽ trả lời tự động thay vì nhân viên.' : 'Bạn có chắc chắn muốn tắt Auto-reply? Sau khi tắt, nhân viên sẽ có thể trả lời như bình thường.',
+									okText: 'Xác nhận',
+									cancelText: 'Hủy',
+									onOk: async () => {
+										// Call backend to toggle via centralized API helper
+										try {
+											const convId = conversation.id || conversation.conv_id || conversation.conversation_id;
+											if (!convId) {
+												message.error('Conversation id not found');
+												return;
+											}
+											try {
+												const data = await setConversationBotReply(conversation.platform || 'facebook', convId, val, accountId);
+												setAutoReply(!!val);
+												if (onConversationUpdate && data) onConversationUpdate(data);
+												socket.emit('complete-conversation', {
+													account_id: accountId,
+													conv_id: conversation.id
+												});
+												message.success('Đã chuyển sang chế độ trả lời tự động');
+												if (timerRef.current) {
+													clearInterval(timerRef.current);
+													setCountdown(0);
+												}
+											} catch (err) {
+												console.error('setConversationBotReply error', err);
+												const errMsg = (err && err.info && err.info.message) || err.message || 'Không thể cập nhật Auto-reply';
+												message.error(errMsg);
+											}
+										} catch (e) {
+											message.error('Lỗi khi gọi API Auto-reply');
+										}
+									},
+								});
+							}}
 							size="small"
 						/>
 					</div>
@@ -563,6 +618,15 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 						/>
 					);
 				})()
+			)}
+
+			{autoReply && (
+				<Alert
+					type="info"
+					showIcon
+					title="Bot đang trả lời tự động ..."
+					style={{ borderRadius: 0, border: 'none', height: '40px' }}
+				/>
 			)}
 
 			{/* Content Area - Split when sidebar is open */}
@@ -781,16 +845,16 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							<Button
 								icon={<PictureOutlined />}
 								size="large"
-								onClick={() => { if (isDisconnected || (isLocked && !isHandler)) return; fileInputRef.current?.click(); }}
+								onClick={() => { if (isDisconnected || (isLocked && !isHandler) || autoReply) return; fileInputRef.current?.click(); }}
 								style={{ flexShrink: 0 }}
-								disabled={isDisconnected || (isLocked && !isHandler)}
+								disabled={isDisconnected || (isLocked && !isHandler) || autoReply}
 							/>
 							<Input
 								placeholder={isDisconnected ? "Nền tảng không được kết nối..." : "Nhập tin nhắn..."}
 								value={ChatMessage}
 								onChange={handleMessageChange} onBlur={() => { if (!isDisconnected) stopTyping(); }}
-								onPressEnter={!isDisconnected && !(isLocked && !isHandler) ? handleSend : null}
-								disabled={isDisconnected || (isLocked && !isHandler)}
+								onPressEnter={!isDisconnected && !(isLocked && !isHandler) && !autoReply ? handleSend : null}
+								disabled={isDisconnected || (isLocked && !isHandler) || autoReply}
 								size="large"
 								style={{
 									flex: 1,
@@ -803,7 +867,7 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 								icon={<SendOutlined />}
 								size="large"
 								onClick={handleSend}
-								disabled={isDisconnected || (isLocked && !isHandler)}
+								disabled={isDisconnected || (isLocked && !isHandler) || autoReply}
 								style={{
 									background: '#6c3fb5',
 									borderColor: '#6c3fb5',

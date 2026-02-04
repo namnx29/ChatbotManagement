@@ -480,6 +480,66 @@ class ConversationModel:
             return_document=True
         )
         return self._serialize(result)
+
+    def set_bot_reply_by_id(self, conversation_id, enabled, account_id=None, organization_id=None):
+        """Set the auto-reply flag for a conversation by its _id.
+
+        Stores both `bot_reply` (snake_case) and `bot-reply` (hyphen) for compatibility.
+        Returns the updated serialized conversation document.
+        """
+        try:
+            from bson.objectid import ObjectId
+            try:
+                conv_obj_id = ObjectId(conversation_id)
+            except Exception:
+                conv_obj_id = conversation_id
+        except Exception:
+            conv_obj_id = conversation_id
+
+        now = datetime.utcnow()
+
+        # First, find the primary conversation document to discover its oa_id/customer_id
+        base_query = {'_id': conv_obj_id}
+        if organization_id:
+            base_query['organizationId'] = organization_id
+        elif account_id:
+            base_query['accountId'] = account_id
+
+        try:
+            primary = self.collection.find_one(base_query)
+            if not primary:
+                logger.warning(f"Conversation not found for set_bot_reply_by_id: {conversation_id}")
+                return None
+
+            # Build a match to update all related conversation documents that represent
+            # the same logical conversation (same oa_id + customer_id) within the
+            # same organization or account scope. This ensures toggling syncs across
+            # duplicate/legacy docs for other accounts in the same organization.
+            match = {
+                'oa_id': primary.get('oa_id'),
+                'customer_id': primary.get('customer_id')
+            }
+            if primary.get('organizationId'):
+                match['organizationId'] = primary.get('organizationId')
+            elif primary.get('accountId'):
+                match['accountId'] = primary.get('accountId')
+
+            update = {
+                '$set': {
+                    'bot_reply': bool(enabled),
+                    'updated_at': now,
+                }
+            }
+
+            # Update all matching documents so all staff see the change (org/account scoped)
+            self.collection.update_many(match, update)
+
+            # Return the primary document (refreshed)
+            refreshed = self.collection.find_one({'_id': primary.get('_id')})
+            return self._serialize(refreshed)
+        except Exception as e:
+            logger.error(f"Failed to set bot reply flag: {e}")
+            return None
     
     def list_by_organization(self, organization_id, limit=100, skip=0):
         """List all conversations for an organization, sorted by updated_at descending

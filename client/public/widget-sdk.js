@@ -21,11 +21,52 @@
     function createFab() {
         const btn = document.createElement('button');
         btn.innerHTML = CHAT_ICON;
-        btn.style.cssText = "position:fixed;right:24px;bottom:24px;width:60px;height:60px;border-radius:30px;background:#6c3fb5;color:white;border:none;box-shadow:0 6px 18px rgba(0,0,0,0.2);z-index:1000000;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.2s ease;";
+        btn.style.cssText = `
+        position:fixed;
+        right:24px;
+        bottom:24px;
+        width:60px;
+        height:60px;
+        border-radius:30px;
+        background:#6c3fb5;
+        color:white;
+        border:none;
+        box-shadow:0 6px 18px rgba(0,0,0,0.2);
+        z-index:1000000;
+        cursor:pointer;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        transition:transform 0.2s ease;
+    `;
+        btn.style.position = 'fixed';
+
+        const dot = createNotificationDot();
+        btn.appendChild(dot);
+
+        btn._dot = dot; // store reference
         return btn;
     }
 
+    function createNotificationDot() {
+        const dot = document.createElement('span');
+        dot.style.cssText = `
+        position:absolute;
+        top:10px;
+        right:10px;
+        width:10px;
+        height:10px;
+        background:#ff4d4f;
+        border-radius:50%;
+        display:none;
+    `;
+        return dot;
+    }
+
     function init(opts) {
+        let isOpen = false;
+        let hasUnread = false;
+
         const chatbotId = opts.chatbotId || config.chatbotId;
         const baseUrl = opts.baseUrl || config.baseUrl;
 
@@ -38,22 +79,50 @@
         document.body.appendChild(iframe);
         document.body.appendChild(fab);
 
-        const toggleWidget = (isOpen) => {
-            iframe.style.display = isOpen ? 'block' : 'none';
-            fab.style.display = isOpen ? 'none' : 'flex';
-            iframe.setAttribute('aria-hidden', !isOpen);
+        const showNotificationDot = () => {
+            if (fab._dot) fab._dot.style.display = 'block';
+        };
+
+        const hideNotificationDot = () => {
+            if (fab._dot) fab._dot.style.display = 'none';
+        };
+
+        const toggleWidget = (open) => {
+            isOpen = open;
+            iframe.style.display = open ? 'block' : 'none';
+            fab.style.display = open ? 'none' : 'flex';
+            iframe.setAttribute('aria-hidden', !open);
+
+            if (open) {
+                hasUnread = false;
+                hideNotificationDot();
+            }
         };
 
         fab.addEventListener('click', () => toggleWidget(true));
 
         window.addEventListener('message', (ev) => {
             if (!ev.data) return;
-            if (ev.data.type === 'CHAT_WIDGET_CLOSE') toggleWidget(false);
-            if (ev.data.type === 'CHAT_WIDGET_EXPAND') {
-                iframe.style.width = '800px'; iframe.style.height = '600px';
+
+            if (ev.data.type === 'CHAT_WIDGET_CLOSE') {
+                toggleWidget(false);
             }
+
+            if (ev.data.type === 'CHAT_WIDGET_EXPAND') {
+                iframe.style.width = '800px';
+                iframe.style.height = '600px';
+            }
+
             if (ev.data.type === 'CHAT_WIDGET_MINIMIZE') {
-                iframe.style.width = '360px'; iframe.style.height = '450px';
+                iframe.style.width = '360px';
+                iframe.style.height = '450px';
+            }
+
+            if (ev.data.type === 'CHAT_WIDGET_NEW_MESSAGE') {
+                if (!isOpen) {
+                    hasUnread = true;
+                    showNotificationDot();
+                }
             }
         });
 

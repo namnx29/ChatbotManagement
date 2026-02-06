@@ -249,6 +249,9 @@ def get_all_conversations():
                 oa_id = conv.get('oa_id')
                 customer_id = conv.get('customer_id', '')
                 
+                if oa_id == 'widget':
+                    continue
+
                 # Extract platform from customer_id (format: "platform:sender_id")
                 if ':' in customer_id:
                     platform, sender_id = customer_id.split(':', 1)
@@ -339,7 +342,7 @@ def get_all_conversations():
                     'oa_id': oa_id,
                     'customer_id': conv.get('customer_id'),
                     'chatbot_id': None,
-                    'chatbot_info': {},
+                    'chatbot_info': conv.get('chatbot_info', {}),
                     'platform': platform,
                     'name': conv.get('display_name') or 'Khách hàng',
                     'avatar': conv.get('customer_info', {}).get('avatar') or None,

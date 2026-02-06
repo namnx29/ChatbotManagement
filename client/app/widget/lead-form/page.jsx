@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Form, Input, Button, Typography, Space } from 'antd';
+import { Form, Input, Button, Typography, Space, App } from 'antd';
 import { CloseOutlined, SendOutlined, PaperClipOutlined, ExpandAltOutlined, CompressOutlined } from '@ant-design/icons';
 import { io } from 'socket.io-client';
 
@@ -10,6 +10,7 @@ const STORAGE_KEY = 'widget_lead_form_v1';
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export default function LeadFormPage() {
+	const { message } = App.useApp();
 	const [form] = Form.useForm();
 	const [showChat, setShowChat] = useState(false);
 	const [userData, setUserData] = useState({ name: '', phone: '' });
@@ -19,6 +20,7 @@ export default function LeadFormPage() {
 	const [conversationId, setConversationId] = useState(null);
 	const scrollRef = useRef(null);
 	const socketRef = useRef(null);
+	const fileInputRef = useRef(null);
 	const [orgId, setOrgId] = useState(null);
 	const [accountId, setAccountId] = useState(null);
 	const [chatbotId, setChatbotId] = useState(null);
@@ -89,18 +91,24 @@ export default function LeadFormPage() {
 
 		const handleNewMessage = (payload) => {
 			if (payload.direction !== 'out' || payload.conv_id !== conversationId) return;
+
 			const messageText = payload.message || payload.text || '';
-			if (!messageText) return;
+			const imageUrl = payload.message_doc?.metadata?.image || null;
+			if (!messageText && !imageUrl) return;
 
 			const newId = payload.message_doc?._id || payload.id || Date.now();
 			setMessages(prev => {
 				if (prev.find(m => m.id === newId)) return prev;
-				return [...prev, {
-					id: newId,
-					text: messageText,
-					sender: 'bot',
-					time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-				}];
+				return [
+					...prev,
+					{
+						id: newId,
+						text: imageUrl ? (messageText || 'Tệp đính kèm') : messageText,
+						image: imageUrl || null,
+						sender: 'bot',
+						time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+					},
+				];
 			});
 		};
 
@@ -124,12 +132,19 @@ export default function LeadFormPage() {
 				});
 				const json = await res.json();
 				if (res.ok && json.success && Array.isArray(json.data)) {
-					const mapped = json.data.map((m) => ({
-						id: m._id || m.id,
-						text: m.text || '',
-						sender: m.direction === 'out' ? 'bot' : 'user',
-						time: m.created_at ? new Date(m.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '...',
-					}));
+					const mapped = json.data.map((m) => {
+						const meta = m.metadata || {};
+						const imageUrl = meta.image || null;
+						return {
+							id: m._id || m.id,
+							text: imageUrl ? (m.text || 'Tệp đính kèm') : (m.text || ''),
+							image: imageUrl || null,
+							sender: m.direction === 'out' ? 'bot' : 'user',
+							time: m.created_at
+								? new Date(m.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+								: '...',
+						};
+					});
 					setMessages(mapped);
 				}
 			} catch (e) { }
@@ -199,10 +214,65 @@ export default function LeadFormPage() {
 				}
 			}
 		} catch (err) {
-			console.error(err);
+			message.error('Có lỗi xảy ra khi gửi tin nhắn');
 		} finally {
 			setLoading(false);
 		}
+	};
+
+	const handleImageUpload = (e) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		// Reset input so the same file can be selected again
+		e.target.value = '';
+
+		const reader = new FileReader();
+		reader.onloadend = async () => {
+			const imageData = reader.result;
+			if (!imageData) return;
+
+			// Optimistic UI update
+			const imgMsg = {
+				id: Date.now(),
+				image: imageData,
+				text: '',
+				sender: 'user',
+				time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+			};
+			setMessages(prev => [...prev, imgMsg]);
+
+			if (!conversationId) {
+				message.warn('Không thể gửi ảnh trước khi cuộc trò chuyện được tạo');
+				return;
+			}
+
+			setLoading(true);
+			try {
+				const url = `${BASE_URL}/api/widget/conversations/${encodeURIComponent(conversationId)}/messages`;
+				const res = await fetch(url, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						...(orgId ? { 'X-Organization-ID': orgId } : {}),
+					},
+					body: JSON.stringify({
+						image: imageData,
+						organizationId: orgId,
+					}),
+				});
+				const data = await res.json();
+				if (!res.ok || !data.success) {
+					message.error('Có lỗi xảy ra khi gửi ảnh');
+				}
+			} catch (err) {
+				message.error('Có lỗi xảy ra khi gửi ảnh');
+			} finally {
+				setLoading(false);
+			}
+		};
+
+		reader.readAsDataURL(file);
 	};
 
 	if (showChat) {
@@ -269,22 +339,30 @@ export default function LeadFormPage() {
 								alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start' // Push to right or left
 							}}
 						>
-							<div style={{
-								display: 'inline-block',
-								padding: '12px 16px',
-								borderRadius: msg.sender === 'user' ? '20px 20px 0 20px' : '20px 20px 20px 0',
-								background: msg.sender === 'user' ? '#6c3fb5' : '#2a2a2a',
-								color: 'white',
-								maxWidth: '85%',
-								fontSize: '15px',
-								// The key fixes:
-								textAlign: 'left', // Keep text readable inside the bubble
-								lineHeight: '1.4',
-								wordBreak: 'break-word',
-								whiteSpace: 'pre-wrap'
-							}}>
-								{msg.text}
-							</div>
+							{msg.image ? (
+								<img
+									src={msg.image}
+									alt="attachment"
+									style={{ maxWidth: '260px', maxHeight: '200px', borderRadius: '12px', display: 'block' }}
+								/>
+							) : (
+								<div style={{
+									display: 'inline-block',
+									padding: '12px 16px',
+									borderRadius: msg.sender === 'user' ? '20px 20px 0 20px' : '20px 20px 20px 0',
+									background: msg.sender === 'user' ? '#6c3fb5' : '#2a2a2a',
+									color: 'white',
+									maxWidth: '85%',
+									fontSize: '15px',
+									textAlign: 'left',
+									lineHeight: '1.4',
+									wordBreak: 'break-word',
+									whiteSpace: 'pre-wrap'
+								}}>
+
+									{msg.text}
+								</div>
+							)}
 
 							<div style={{
 								fontSize: '11px',
@@ -317,7 +395,21 @@ export default function LeadFormPage() {
 						/>
 						<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
 							<Space size="middle" style={{ color: '#888', fontSize: '18px' }}>
-								<PaperClipOutlined style={{ cursor: 'pointer' }} />
+								<PaperClipOutlined
+									style={{ cursor: 'pointer' }}
+									onClick={() => {
+										if (fileInputRef.current) {
+											fileInputRef.current.click();
+										}
+									}}
+								/>
+								<input
+									type="file"
+									ref={fileInputRef}
+									style={{ display: 'none' }}
+									accept="image/*"
+									onChange={handleImageUpload}
+								/>
 							</Space>
 							<Button
 								type="primary"

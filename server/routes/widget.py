@@ -502,6 +502,8 @@ def send_conversation_message(conv_id):
 
             # 3. Add Message (Incoming from customer)
             metadata = {'source': 'widget', 'type': 'widget'}
+            if image:
+                metadata['image'] = image
             message_doc = message_model.add_message(
                 platform='widget',
                 oa_id=oa_id,

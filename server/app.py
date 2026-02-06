@@ -88,6 +88,13 @@ def create_app(env=None):
     from routes.integrations import integrations_bp
     app.register_blueprint(integrations_bp)
 
+    # Register widget endpoints (Lead Form embeddable)
+    try:
+        from routes.widget import widget_bp
+        app.register_blueprint(widget_bp)
+    except Exception as e:
+        logger.info(f"Widget routes not available: {e}")
+
     # Attach mongo client to app for other modules
     app.mongo_client = mongo_client
 

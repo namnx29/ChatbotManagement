@@ -1,7 +1,7 @@
 'use client';
 
 import { Avatar, Dropdown, Tooltip } from 'antd';
-import { MoreOutlined, TagFilled, DisconnectOutlined } from '@ant-design/icons';
+import { MoreOutlined, TagFilled, DisconnectOutlined, GlobalOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 
 const platformIcons = {
@@ -25,6 +25,9 @@ const platformIcons = {
 			alt="Zalo"
 			style={{ width: '16px', height: '16px', objectFit: 'contain' }}
 		/>
+	),
+	widget: (
+		<GlobalOutlined style={{ fontSize: '16px' }} />
 	),
 };
 

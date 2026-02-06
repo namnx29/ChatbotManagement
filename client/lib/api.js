@@ -1152,3 +1152,127 @@ export async function setConversationBotReply(platform, convId, enabled, account
   const ep = accountId ? `${endpoint}?accountId=${encodeURIComponent(accountId)}` : endpoint;
   return apiCall('POST', ep, { enabled });
 }
+
+
+/**
+ * Widget: Get conversation messages
+ * @param {string} accountId
+ * @param {string} convId
+ * @param {object} opts - { limit, skip }
+ */
+export async function getWidgetConversationMessages(accountId, convId, opts = {}) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const url = new URL(`${API_BASE_URL}/api/widget/conversations/${encodeURIComponent(convId)}/messages`);
+    if (opts.limit) url.searchParams.append('limit', opts.limit);
+    if (opts.skip) url.searchParams.append('skip', opts.skip);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /widget/conversations/:id/messages]:', error);
+    throw error;
+  }
+}
+
+/**
+ * Widget: Mark conversation as read
+ * @param {string} accountId
+ * @param {string} convId
+ */
+export async function markWidgetConversationRead(accountId, convId) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/widget/conversations/${encodeURIComponent(convId)}/mark-read`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+    });
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /widget/conversations/:id/mark-read]:', error);
+    throw error;
+  }
+}
+
+/**
+ * Widget: Send message
+ * @param {string} accountId
+ * @param {string} convId
+ * @param {string} text
+ */
+export async function sendWidgetConversationMessage(accountId, convId, text) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/widget/conversations/${encodeURIComponent(convId)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ text }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      const err = new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+      err.status = response.status;
+      err.body = result;
+      throw err;
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /widget/conversations/:id/messages]:', error);
+    throw error;
+  }
+}
+
+/**
+ * Widget: Send attachment (image) in a conversation
+ * @param {string} accountId
+ * @param {string} convId
+ * @param {string} imageData - Data URL or accessible URL
+ * @param {string} text - Optional text
+ */
+export async function sendWidgetConversationAttachment(accountId, convId, imageData, text = null) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/widget/conversations/${encodeURIComponent(convId)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({ image: imageData, text }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      const err = new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+      err.status = response.status;
+      err.body = result;
+      throw err;
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /widget/conversations/:id/messages (attachment)]:', error);
+    throw error;
+  }
+}

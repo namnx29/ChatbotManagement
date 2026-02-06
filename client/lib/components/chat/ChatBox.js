@@ -9,7 +9,8 @@ import {
 	EditOutlined,
 	TagFilled,
 	ArrowDownOutlined,
-	DownOutlined
+	DownOutlined,
+	GlobalOutlined
 } from '@ant-design/icons';
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
@@ -41,6 +42,9 @@ const platformIcons = {
 			alt="Zalo"
 			style={{ width: '16px', height: '16px', objectFit: 'contain' }}
 		/>
+	),
+	widget: (
+		<GlobalOutlined style={{ fontSize: '16px' }} />
 	),
 };
 
@@ -477,7 +481,8 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 									{platformIcons[conversation.platform]}
 									<span style={{ fontSize: '13px', color: '#666' }}>
 										{conversation.platform === 'facebook' ? 'Facebook' :
-											conversation.platform === 'instagram' ? 'Instagram' : 'Zalo'}
+											conversation.platform === 'instagram' ? 'Instagram' :
+												conversation.platform === 'zalo' ? 'Zalo' : 'Website'}
 									</span>
 								</>
 							)}
@@ -924,7 +929,8 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 													{platformIcons[conversation.platform]}
 													<span style={{ fontSize: '13px', color: '#666' }}>
 														{conversation.platform === 'facebook' ? 'Facebook' :
-															conversation.platform === 'instagram' ? 'Instagram' : 'Zalo'}
+															conversation.platform === 'instagram' ? 'Instagram' :
+																conversation.platform === 'zalo' ? 'Zalo' : 'Website'}
 													</span>
 												</>
 											)}

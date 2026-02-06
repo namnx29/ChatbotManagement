@@ -15,7 +15,8 @@ export default function CustomerNameChangeModal({
   const { message } = App.useApp();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-
+  const customer_id = conversation.platform + ':' + conversation.id.split(':').pop();
+  
   useEffect(() => {
     if (visible) {
       form.setFieldsValue({
@@ -40,7 +41,7 @@ export default function CustomerNameChangeModal({
       const result = await updateConversationNickname(
         accountId,
         conversation.oa_id,
-        conversation.customer_id,
+        customer_id,
         values.nickname
       );
       if (result.success) {

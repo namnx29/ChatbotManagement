@@ -110,6 +110,11 @@ export default function LeadFormPage() {
 					},
 				];
 			});
+
+			window.parent.postMessage(
+				{ type: 'CHAT_WIDGET_NEW_MESSAGE' },
+				'*'
+			);
 		};
 
 		socketRef.current.on('new-message', handleNewMessage);

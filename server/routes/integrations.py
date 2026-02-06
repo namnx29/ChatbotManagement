@@ -307,6 +307,56 @@ def get_all_conversations():
                 }
                 enriched_conversations.append(enriched_conv)
         
+        # NEW: Also fetch widget conversations (which don't have chatbot_id)
+        # Widget conversations are scoped by oa_id='widget' and organization_id
+        try:
+            widget_conversations = []
+            if user_org_id:
+                widget_conversations = conversation_model.find_by_oa(oa_id='widget', limit=2000, skip=0, account_id=None)
+                # Filter by organizationId to only get conversations for this organization
+                widget_conversations = [c for c in widget_conversations if c.get('organizationId') == str(user_org_id) or c.get('organizationId') == user_org_id]
+            else:
+                widget_conversations = conversation_model.find_by_oa(oa_id='widget', limit=2000, skip=0, account_id=account_id)
+            
+            logger.info(f"Found {len(widget_conversations)} widget conversations for organization {user_org_id}")
+            
+            for conv in widget_conversations:
+                oa_id = 'widget'
+                customer_id = conv.get('customer_id', '')
+                platform = 'widget'
+                
+                # Extract sender_id from customer_id (format: "widget:uuid")
+                if ':' in customer_id:
+                    _, sender_id = customer_id.split(':', 1)
+                else:
+                    sender_id = customer_id
+                
+                # Construct conversation ID
+                conversation_id = f"{platform}:{oa_id}:{sender_id}"
+                
+                enriched_conv = {
+                    'id': conversation_id,
+                    'oa_id': oa_id,
+                    'customer_id': conv.get('customer_id'),
+                    'chatbot_id': None,
+                    'chatbot_info': {},
+                    'platform': platform,
+                    'name': conv.get('display_name') or 'Khách hàng',
+                    'avatar': conv.get('customer_info', {}).get('avatar') or None,
+                    'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
+                    'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
+                    'unreadCount': conv.get('unread_count', 0),
+                    # Respect stored bot_reply flag for widget conversations as well
+                    'bot_reply': conv.get('bot-reply') if 'bot-reply' in conv else (conv.get('bot_reply') if 'bot_reply' in conv else None),
+                    'platform_status': {
+                        'is_connected': True,  # Widget is always "connected"
+                        'disconnected_at': None
+                    }
+                }
+                enriched_conversations.append(enriched_conv)
+        except Exception as e:
+            logger.warning(f"Failed to fetch widget conversations: {e}")
+        
         # Sort by time descending (most recent first)
         enriched_conversations.sort(key=lambda x: x.get('time') or '', reverse=True)
         

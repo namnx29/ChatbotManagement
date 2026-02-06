@@ -6,6 +6,7 @@ import {
   DownOutlined,
   SwapOutlined,
   FilterOutlined,
+  GlobalOutlined
 } from '@ant-design/icons';
 import { useState, useEffect, useRef, useCallback, useMemo, useTransition } from 'react';
 import { io } from 'socket.io-client';
@@ -19,6 +20,10 @@ import {
   sendZaloConversationMessage,
   sendZaloConversationAttachment,
   markZaloConversationRead,
+  getWidgetConversationMessages,
+  sendWidgetConversationMessage,
+  sendWidgetConversationAttachment,
+  markWidgetConversationRead,
 } from '@/lib/api';
 import ChatBox from '@/lib/components/chat/ChatBox';
 import ConversationItem from '@/lib/components/chat/ConversationItem';
@@ -43,6 +48,7 @@ const FILTER_OPTIONS = [
   { value: 'facebook', label: 'Facebook', icon: '/Messenger.png' },
   { value: 'instagram', label: 'Instagram', icon: '/Instagram.png' },
   { value: 'zalo', label: 'Zalo', icon: '/Zalo.png' },
+  { value: 'widget', label: 'Website', icon: <GlobalOutlined /> },
 ];
 
 export default function ChatManagementPage() {
@@ -162,6 +168,8 @@ export default function ChatManagementPage() {
 
         if (selectedChat.platform === 'zalo') {
           await markZaloConversationRead(accountId, selectedChat.id);
+        } else if (selectedChat.platform === 'widget') {
+          await markWidgetConversationRead(accountId, selectedChat.id);
         } else {
           await markConversationRead(accountId, selectedChat.id);
         }
@@ -340,6 +348,8 @@ export default function ChatManagementPage() {
               window.dispatchEvent(new CustomEvent('reset-conversation-unread', { detail: { conversations: convId } }));
               if (payload.platform === 'zalo') {
                 await markZaloConversationRead(accountId, convId);
+              } else if (payload.platform === 'widget') {
+                await markWidgetConversationRead(accountId, convId);
               } else {
                 await markConversationRead(accountId, convId);
               }
@@ -543,6 +553,8 @@ export default function ChatManagementPage() {
       let res;
       if (conversation.platform === 'zalo') {
         res = await getZaloConversationMessages(accountId, conversation.id, { limit: MESSAGE_LIMIT });
+      } else if (conversation.platform === 'widget') {
+        res = await getWidgetConversationMessages(accountId, conversation.id, { limit: MESSAGE_LIMIT });
       } else {
         res = await getConversationMessages(accountId, conversation.id, { limit: MESSAGE_LIMIT });
       }
@@ -571,6 +583,8 @@ export default function ChatManagementPage() {
       // Mark as read on server
       if (conversation.platform === 'zalo') {
         await markZaloConversationRead(accountId, conversation.id);
+      } else if (conversation.platform === 'widget') {
+        await markWidgetConversationRead(accountId, conversation.id);
       } else {
         await markConversationRead(accountId, conversation.id);
       }
@@ -603,6 +617,8 @@ export default function ChatManagementPage() {
       let res;
       if (selectedChat.platform === 'zalo') {
         res = await getZaloConversationMessages(accountId, selectedChat.id, { limit: selectedChat.limit, skip: selectedChat.skip });
+      } else if (selectedChat.platform === 'widget') {
+        res = await getWidgetConversationMessages(accountId, selectedChat.id, { limit: selectedChat.limit, skip: selectedChat.skip });
       } else {
         res = await getConversationMessages(accountId, selectedChat.id, { limit: selectedChat.limit, skip: selectedChat.skip });
       }
@@ -700,6 +716,12 @@ export default function ChatManagementPage() {
         } else {
           await sendZaloConversationMessage(accountId, selectedChat.id, newMessage.text);
         }
+      } else if (selectedChat.platform === 'widget') {
+        if (newMessage.image) {
+          await sendWidgetConversationAttachment(accountId, selectedChat.id, newMessage.image, newMessage.text || null);
+        } else {
+          await sendWidgetConversationMessage(accountId, selectedChat.id, newMessage.text);
+        }
       } else {
         if (newMessage.image) {
           await sendConversationAttachment(
@@ -721,6 +743,8 @@ export default function ChatManagementPage() {
         updateConversationInList(selectedChat.id, { isUnread: false });
         if (selectedChat.platform === 'zalo') {
           await markZaloConversationRead(accountId, selectedChat.id);
+        } else if (selectedChat.platform === 'widget') {
+          await markWidgetConversationRead(accountId, selectedChat.id);
         } else {
           await markConversationRead(accountId, selectedChat.id);
         }
@@ -784,13 +808,17 @@ export default function ChatManagementPage() {
   }, [conversations, filterChannel, debouncedSearch]);
 
   // Render helper for select options
+  // Update this function in your code
   const renderSelectLabel = useCallback((text, icon) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-      {icon && <img src={icon} alt={text} style={{ width: '16px' }} />}
+      {icon && (
+        typeof icon === 'string'
+          ? <img src={icon} alt={text} style={{ width: '16px' }} />
+          : icon // If it's a React component (like GlobalOutlined), render it directly
+      )}
       <span>{text}</span>
     </div>
   ), []);
-
   // Memoized select options
   const selectOptions = useMemo(() =>
     FILTER_OPTIONS.map(opt => ({

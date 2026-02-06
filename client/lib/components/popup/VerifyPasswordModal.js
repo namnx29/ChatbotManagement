@@ -1,9 +1,11 @@
 'use client';
 
-import { Modal, Form, Input, Button, App, Spin } from 'antd';
+import { Modal, Form, Input, Button, App, Spin, Card, Typography } from 'antd';
 import { LockOutlined, EyeOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import { useState, useEffect, useCallback } from 'react';
 import { verifyAdminPassword, getStaffPassword } from '@/lib/api';
+
+const { Text } = Typography;
 
 export default function VerifyPasswordModal({
 	open,
@@ -105,11 +107,6 @@ export default function VerifyPasswordModal({
 		onClose();
 	};
 
-	const copyToClipboard = () => {
-		navigator.clipboard.writeText(retrievedPassword);
-		message.success('Mật khẩu đã được sao chép');
-	};
-
 	return (
 		<Modal
 			open={open}
@@ -133,36 +130,48 @@ export default function VerifyPasswordModal({
 								Phiên xác thực sẽ hết hạn lúc: <strong>{expiryTime?.toLocaleTimeString('vi-VN')}</strong>
 							</p>
 
-							<div style={{
-								background: '#f5f5f5',
-								padding: '16px',
-								borderRadius: '4px',
-								marginBottom: '24px',
-								display: 'flex',
-								justifyContent: 'space-between',
-								alignItems: 'center',
-							}}>
-								<div style={{ fontFamily: 'monospace', fontSize: '16px', fontWeight: '600' }}>
-									{showPassword ? retrievedPassword : '•'.repeat(6)}
-								</div>
-								<div style={{ display: 'flex', gap: '8px' }}>
+							<Card
+								size="small"
+								styles={{
+									body: {
+										background: '#f5f5f5',
+										borderRadius: 4,
+									},
+								}}
+								extra={
+									<Text
+										copyable={{
+											text: retrievedPassword,
+										}}
+									>
+										Sao chép
+									</Text>
+								}
+							>
+								<div
+									style={{
+										display: 'flex',
+										justifyContent: 'space-between',
+										alignItems: 'center',
+									}}
+								>
+									<Text
+										style={{
+											fontFamily: 'monospace',
+											fontSize: 16,
+											fontWeight: 600,
+										}}
+									>
+										{showPassword ? retrievedPassword : '•'.repeat(6)}
+									</Text>
+
 									<Button
 										type="text"
 										icon={showPassword ? <EyeInvisibleOutlined /> : <EyeOutlined />}
 										onClick={() => setShowPassword(!showPassword)}
 									/>
-									<Button
-										type="primary"
-										onClick={copyToClipboard}
-										style={{ background: '#6c3fb5', borderColor: '#6c3fb5' }}
-									>
-										Sao chép
-									</Button>
 								</div>
-							</div>
-							<div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-								<Button size="large" onClick={handleCancel}>Đóng</Button>
-							</div>
+							</Card>
 						</>
 					) : (
 						/* VIEW 2: ADMIN PASSWORD FORM */

@@ -833,6 +833,10 @@ def webhook_event():
             'name': customer_doc.get('name') if customer_doc else None,
             'avatar': customer_doc.get('avatar') if customer_doc else None,
         },
+        'chatbot_info': {
+            'name': chatbot_data.get('name'),
+            'avatar': chatbot_data.get('avatar_url'),
+        }
     }
 
     try:

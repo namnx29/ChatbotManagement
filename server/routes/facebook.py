@@ -730,6 +730,10 @@ def webhook_event():
                 'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
                 'direction': direction,
                 'sender_profile': sender_profile,
+                'chatbot_info': {
+                    'name': chatbot_data.get('name'),
+                    'avatar': chatbot_data.get('avatar_url'),
+                }
             }
             
             # SECURITY FIX: Emit socket events only to the account that owns this integration

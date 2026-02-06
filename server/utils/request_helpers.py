@@ -46,6 +46,14 @@ def get_organization_id_from_request(user_model=None):
     
     return None
 
+def get_chatbot_id_from_request():
+    """Extract account id from flask login or request headers/params/json.
+
+    This consolidates repeated logic across route modules.
+    """
+    chatbot_id = request.headers.get('X-Chatbot-ID')
+    if chatbot_id:
+        return chatbot_id
 
 def extract_isolation_context(user_model=None):
     """Extract both accountId and organizationId for isolation queries

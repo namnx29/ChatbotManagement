@@ -7,6 +7,7 @@ import { io } from 'socket.io-client';
 
 const { Text } = Typography;
 const STORAGE_KEY = 'widget_lead_form_v1';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export default function LeadFormPage() {
 	const [form] = Form.useForm();
@@ -20,6 +21,7 @@ export default function LeadFormPage() {
 	const socketRef = useRef(null);
 	const [orgId, setOrgId] = useState(null);
 	const [accountId, setAccountId] = useState(null);
+	const [chatbotId, setChatbotId] = useState(null);
 	const [isMaximized, setIsMaximized] = useState(false);
 
 	const toggleExpand = () => {
@@ -37,70 +39,23 @@ export default function LeadFormPage() {
 		}
 	}, [messages]);
 
+	// 1. Get ChatbotId from URL
 	useEffect(() => {
 		const params = new URLSearchParams(window.location.search);
-		setOrgId(params.get('organizationId'));
-		setAccountId(params.get('accountId'));
+		const cid = params.get('chatbotId');
+		if (cid) setChatbotId(cid);
 	}, []);
 
-	useEffect(() => {
-		if (!orgId || !accountId || socketRef.current) return;
-
-		socketRef.current = io('https://elcom.vn', {
-			transports: ['websocket', 'polling'],
-			auth: { account_id: accountId }
-		});
-
-		return () => {
-			if (socketRef.current) {
-				socketRef.current.off('new-message');
-			}
-		};
-	}, [orgId, accountId]);
-
-	useEffect(() => {
-		if (!socketRef.current || !conversationId) return;
-
-		const handleNewMessage = (payload) => {
-			if (payload.direction !== 'out' || payload.conv_id !== conversationId) return;
-
-			const messageText = payload.message || payload.text || '';
-			if (!messageText) return;
-
-			const newId = payload.message_doc?._id || payload.id || Date.now();
-
-			setMessages(prev => {
-				// Prevent duplication by checking if ID already exists
-				if (prev.find(m => m.id === newId)) return prev;
-
-				return [...prev, {
-					id: newId,
-					text: messageText,
-					sender: 'bot',
-					time: new Date(payload.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-				}];
-			});
-		};
-
-		socketRef.current.on('new-message', handleNewMessage);
-
-		return () => {
-			if (socketRef.current) {
-				socketRef.current.off('new-message', handleNewMessage);
-			}
-		};
-	}, [conversationId]);
-
-	const closeWidget = () => {
-		window.parent.postMessage({ type: 'CHAT_WIDGET_CLOSE' }, '*');
-	};
-
+	// 2. Load session from LocalStorage (including previous Org/Account IDs)
 	useEffect(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
 			if (saved.name && saved.phone) {
 				setUserData({ name: saved.name, phone: saved.phone });
 				if (saved.conversationId) setConversationId(saved.conversationId);
+				if (saved.orgId) setOrgId(saved.orgId);
+				if (saved.accountId) setAccountId(saved.accountId);
+
 				setShowChat(true);
 				setMessages([{
 					id: 'greeting',
@@ -112,30 +67,68 @@ export default function LeadFormPage() {
 		} catch (e) { }
 	}, []);
 
+	// 3. Socket Connection - Triggers automatically once IDs are set
+	useEffect(() => {
+		if (!accountId || socketRef.current) return;
+
+		socketRef.current = io('https://elcom.vn', {
+			transports: ['websocket', 'polling'],
+			auth: { account_id: accountId }
+		});
+
+		return () => {
+			if (socketRef.current) {
+				socketRef.current.disconnect();
+				socketRef.current = null;
+			}
+		};
+	}, [accountId]);
+
+	useEffect(() => {
+		if (!socketRef.current || !conversationId) return;
+
+		const handleNewMessage = (payload) => {
+			if (payload.direction !== 'out' || payload.conv_id !== conversationId) return;
+			const messageText = payload.message || payload.text || '';
+			if (!messageText) return;
+
+			const newId = payload.message_doc?._id || payload.id || Date.now();
+			setMessages(prev => {
+				if (prev.find(m => m.id === newId)) return prev;
+				return [...prev, {
+					id: newId,
+					text: messageText,
+					sender: 'bot',
+					time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+				}];
+			});
+		};
+
+		socketRef.current.on('new-message', handleNewMessage);
+		return () => {
+			if (socketRef.current) socketRef.current.off('new-message', handleNewMessage);
+		};
+	}, [conversationId]);
+
+	const closeWidget = () => {
+		window.parent.postMessage({ type: 'CHAT_WIDGET_CLOSE' }, '*');
+	};
+
 	useEffect(() => {
 		const loadHistory = async () => {
 			if (!conversationId || !accountId) return;
 			try {
-				const url = new URL(`http://103.7.40.236:5002/api/widget/conversations/${encodeURIComponent(conversationId)}/messages`);
-				url.searchParams.append('limit', '50');
-
+				const url = new URL(`${BASE_URL}/api/widget/conversations/${encodeURIComponent(conversationId)}/messages`);
 				const res = await fetch(url.toString(), {
-					method: 'GET',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-Account-Id': accountId,
-					},
+					headers: { 'X-Account-Id': accountId },
 				});
 				const json = await res.json();
-
 				if (res.ok && json.success && Array.isArray(json.data)) {
 					const mapped = json.data.map((m) => ({
-						id: m._id || m.id || Math.random().toString(36).substr(2, 9),
+						id: m._id || m.id,
 						text: m.text || '',
 						sender: m.direction === 'out' ? 'bot' : 'user',
-						time: m.created_at
-							? new Date(m.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-							: 'Trước đó',
+						time: m.created_at ? new Date(m.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '...',
 					}));
 					setMessages(mapped);
 				}
@@ -147,13 +140,6 @@ export default function LeadFormPage() {
 	const handleFormSubmit = (values) => {
 		setUserData(values);
 		setShowChat(true);
-		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify({
-				name: values.name,
-				phone: values.phone,
-				conversationId: null,
-			}));
-		} catch (e) { }
 		setMessages([{
 			id: 'greeting',
 			text: 'Xin chào, tôi có thể giúp gì cho bạn?',
@@ -165,48 +151,55 @@ export default function LeadFormPage() {
 	const handleSendMessage = async () => {
 		if (!inputValue.trim() || loading) return;
 
-		const tempId = Date.now();
 		const textToSend = inputValue;
-
-		setMessages(prev => [...prev, { id: tempId, text: textToSend, sender: 'user', time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
+		setMessages(prev => [...prev, { id: Date.now(), text: textToSend, sender: 'user', time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
 		setInputValue('');
 		setLoading(true);
 
 		try {
-			let res;
 			if (conversationId) {
-				res = await fetch(`http://103.7.40.236:5002/api/widget/conversations/${encodeURIComponent(conversationId)}/messages`, {
+				await fetch(`${BASE_URL}/api/widget/conversations/${encodeURIComponent(conversationId)}/messages`, {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/json',
-						...(orgId ? { 'X-Organization-ID': orgId } : {}),
+						'X-Organization-ID': orgId
 					},
 					body: JSON.stringify({ text: textToSend, organizationId: orgId }),
 				});
 			} else {
-				res = await fetch('http://103.7.40.236:5002/api/widget/lead', {
+				// FIRST MESSAGE: Create Lead and Get IDs
+				const res = await fetch(`${BASE_URL}/api/widget/lead`, {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/json',
-						...(orgId ? { 'X-Organization-ID': orgId } : {}),
-						...(accountId ? { 'X-Account-ID': accountId } : {}),
+						'X-Chatbot-ID': chatbotId
 					},
 					body: JSON.stringify({
 						name: userData.name,
 						phone: userData.phone,
 						message: textToSend,
-						organizationId: orgId,
-						accountId: accountId,
+						chatbotId: chatbotId,
 					}),
 				});
 				const data = await res.json();
 				if (data.success && data.conv_id) {
+					// Update local state with new IDs from API
 					setConversationId(data.conv_id);
-					const meta = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-					localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...meta, conversationId: data.conv_id }));
+					setOrgId(data.message_doc.organizationId);
+					setAccountId(data.message_doc.accountId);
+
+					// Save everything to LocalStorage for persistence
+					localStorage.setItem(STORAGE_KEY, JSON.stringify({
+						name: userData.name,
+						phone: userData.phone,
+						conversationId: data.conv_id,
+						orgId: data.message_doc.organizationId,
+						accountId: data.message_doc.accountId
+					}));
 				}
 			}
 		} catch (err) {
+			console.error(err);
 		} finally {
 			setLoading(false);
 		}

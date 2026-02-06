@@ -239,11 +239,11 @@ export default function ChatManagementPage() {
       // Extract profile info
       const profileInfo = {
         name: payload.direction === 'in'
-          ? (payload.sender_profile?.name || 'Khách hàng')
-          : (payload.recipient_profile?.name || payload.sender_profile?.name || 'Khách hàng'),
+          ? (payload.message_doc.sender_profile?.name || 'Khách hàng')
+          : (payload.message_doc.recipient_profile?.name || payload.message_doc.sender_profile?.name || 'Khách hàng'),
         avatar: payload.direction === 'in'
-          ? (payload.sender_profile?.avatar || null)
-          : (payload.recipient_profile?.avatar || payload.sender_profile?.avatar || null),
+          ? (payload.message_doc.sender_profile?.avatar || null)
+          : (payload.message_doc.recipient_profile?.avatar || payload.message_doc.sender_profile?.avatar || null),
       };
 
       // Update or create conversation in sidebar
@@ -261,7 +261,8 @@ export default function ChatManagementPage() {
             isUnread: payload.direction !== 'out',
             messages: [],
             oa_id: payload.oa_id,
-            platform_status: { is_connected: true, disconnected_at: null }
+            platform_status: { is_connected: true, disconnected_at: null },
+            chatbot_info: payload.chatbot_info || {},
           }, ...prev];
         }
 

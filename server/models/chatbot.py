@@ -145,3 +145,10 @@ class ChatbotModel:
                 'updated_at': b.get('updated_at'),
             })
         return bots
+
+    def find_by_chatbot_id(self, chatbot_id):
+        """Find chatbot by its unique chatbot ID (used for widget integration)"""
+        bot = self.collection.find_one({'_id': ObjectId(chatbot_id)})
+        if bot:
+            bot['id'] = str(bot.get('_id'))
+        return bot

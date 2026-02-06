@@ -3,6 +3,7 @@ from models.conversation import ConversationModel
 from models.message import MessageModel
 from utils.request_helpers import get_organization_id_from_request
 from utils.request_helpers import get_account_id_from_request as _get_account_id_from_request
+from utils.request_helpers import get_chatbot_id_from_request
 from flask_cors import cross_origin
 from datetime import datetime
 import uuid
@@ -118,24 +119,55 @@ def submit_lead():
         phone = data.get('phone')
         message = data.get('message') or data.get('text') or ''
 
-        account_id = _get_account_id_from_request()
-        if not account_id:
-            return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
-        # Resolve organization id (header preferred)
-        org_id = get_organization_id_from_request()
-        if not org_id:
-            # Accept organizationId in body as fallback (note: trusting client-provided value)
-            org_id = data.get('organizationId')
+        # account_id = _get_account_id_from_request()
+        # if not account_id:
+        #     return jsonify({'success': False, 'message': 'Account ID required in header X-Account-Id or query'}), 400
+        # # Resolve organization id (header preferred)
+        # org_id = get_organization_id_from_request()
+        # if not org_id:
+        #     # Accept organizationId in body as fallback (note: trusting client-provided value)
+        #     org_id = data.get('organizationId')
 
-        if not org_id:
-            return jsonify({'success': False, 'message': 'organizationId required in header X-Organization-ID or in request body'}), 400
+        # if not org_id:
+        #     return jsonify({'success': False, 'message': 'organizationId required in header X-Organization-ID or in request body'}), 400
+        
+        chatbot_id = get_chatbot_id_from_request()
+        if not chatbot_id:
+            return jsonify({'success': False, 'message': 'Chatbot ID required in header X-Chatbot-ID'}), 400
+
+        from models.chatbot import ChatbotModel
+        from models.customer import CustomerModel
+
+        chatbot_model = ChatbotModel(current_app.mongo_client)
+        customer_model = CustomerModel(current_app.mongo_client)
+
+        chatbot = chatbot_model.find_by_chatbot_id(chatbot_id)
+
+        if not chatbot:
+            return jsonify({'success': False, 'message': 'Chatbot not found'}), 404
+        
+        account_id = chatbot.get('accountId')
+        org_id = chatbot.get('organizationId')
 
         if not (name or phone or message):
             return jsonify({'success': False, 'message': 'At least one of name/phone/message is required'}), 400
 
         # Build a widget-specific customer id
         customer_id = f"widget:{uuid.uuid4().hex}"
+        platform_specific_id = customer_id.replace('widget:', '')
+        customer_doc = customer_model.upsert_customer(
+            platform='widget',
+            platform_specific_id=platform_specific_id,
+            name=name,
+            avatar=None,
+        )
+
         oa_id = 'widget'  # channel identifier
+        sender_profile = {
+            'name': name,
+            'phone': phone,
+            'avatar': None,
+        }
 
         # Persist conversation
         conv_model = ConversationModel(current_app.mongo_client)
@@ -145,10 +177,15 @@ def submit_lead():
             last_message_text=message,
             last_message_created_at=datetime.utcnow(),
             direction='in',
-            customer_info={'name': name or phone or 'Lead'},
+            customer_info=sender_profile,
             increment_unread=True,
             organization_id=org_id,
             account_id=account_id,
+            chatbot_id=chatbot_id,
+            chatbot_info={
+                'name': chatbot.get('name'),
+                'avatar': chatbot.get('avatar_url'),
+            }
         )
 
         # Ensure conversation_id is a string for API responses
@@ -165,7 +202,8 @@ def submit_lead():
             metadata={'phone': phone, 'source': 'widget'},
             conversation_id=conversation_id_str,
             organization_id=org_id,
-            account_id=account_id
+            account_id=account_id,
+            sender_profile=sender_profile,
         )
 
         # Format the conv_id for API use
@@ -184,6 +222,10 @@ def submit_lead():
                 'conversation_id': conversation_id_str,
                 'sent_at': datetime.utcnow().isoformat() + 'Z',
                 'direction': 'in',
+                'chatbot_info': {
+                    'name': chatbot.get('name'),
+                    'avatar': chatbot.get('avatar_url'),
+                }
             }
             if socketio:
                 org_room = f"organization:{str(org_id)}"
@@ -402,7 +444,11 @@ def send_conversation_message(conv_id):
             org_id = get_organization_id_from_request() or data.get('organizationId')
 
         customer_id = f"widget:{sender_id}"
-
+        customer_data = customer_model.find_by_id(sender_id)
+        sender_profile = {
+            'name': customer_data.get('name') if customer_data else None,
+            'avatar': customer_data.get('avatar') if customer_data else None,
+        }
         # Two flows: staff-originated (account_id present) OR widget/customer-originated (no account_id)
         if account_id:
             # STAFF flow: staff is sending a message TO the widget/customer
@@ -437,7 +483,8 @@ def send_conversation_message(conv_id):
                 is_read=True,
                 conversation_id=conversation_id,
                 organization_id=org_id,
-                account_id=account_id
+                account_id=account_id,
+                sender_profile=sender_profile,
             )
         else:
             # WIDGET / CUSTOMER flow: customer is sending message to staff
@@ -465,7 +512,8 @@ def send_conversation_message(conv_id):
                 is_read=False,
                 conversation_id=conversation_id,
                 organization_id=org_id,
-                account_id=None
+                account_id=None,
+                sender_profile=sender_profile,
             )
         
         # 4. Update Conversation State (direction depends on sender)

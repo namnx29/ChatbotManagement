@@ -473,7 +473,7 @@ class ConversationModel:
             query,
             {
                 '$set': {
-                    f'nicknames.{user_id}': nick_name,
+                    f'nicknames.{organization_id}': nick_name,
                     'updated_at': datetime.utcnow(),
                 }
             },

@@ -290,6 +290,11 @@ def get_all_conversations():
                 # Construct conversation ID in the format expected by message endpoints
                 conversation_id = f"{platform}:{oa_id}:{sender_id}"
                 
+                if conv.get('nicknames'):
+                    nick_name = conv.get('nicknames').get(str(user_org_id)) if user_org_id else None
+                else:
+                    nick_name = None
+                    
                 enriched_conv = {
                     'id': conversation_id,
                     'oa_id': oa_id,
@@ -297,7 +302,7 @@ def get_all_conversations():
                     'chatbot_id': conv.get('chatbot_id'),
                     'chatbot_info': conv.get('chatbot_info', {}),
                     'platform': platform,
-                    'name': conv.get('display_name') or 'Khách hàng',
+                    'name': nick_name or conv.get('display_name') or 'Khách hàng',
                     'avatar': conv.get('customer_info', {}).get('avatar') or None,
                     'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
                     'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
@@ -337,6 +342,11 @@ def get_all_conversations():
                 # Construct conversation ID
                 conversation_id = f"{platform}:{oa_id}:{sender_id}"
                 
+                if conv.get('nicknames'):
+                    nick_name = conv.get('nicknames').get(str(user_org_id)) if user_org_id else None
+                else:
+                    nick_name = None
+
                 enriched_conv = {
                     'id': conversation_id,
                     'oa_id': oa_id,
@@ -344,7 +354,7 @@ def get_all_conversations():
                     'chatbot_id': None,
                     'chatbot_info': conv.get('chatbot_info', {}),
                     'platform': platform,
-                    'name': conv.get('display_name') or 'Khách hàng',
+                    'name': nick_name or conv.get('display_name') or 'Khách hàng',
                     'avatar': conv.get('customer_info', {}).get('avatar') or None,
                     'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
                     'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),

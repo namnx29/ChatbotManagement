@@ -742,7 +742,7 @@ def webhook_event():
             # Emit new message event (unless deduped by outgoing echo)
             try:
                     if not deduped:
-                        _emit_socket('new-message', payload, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+                        _emit_socket('new-message', payload, organization_id=integration.get('organizationId'))
                         logger.info(f'Emitted new-message to account {account_id_owner} and org {integration.get("organizationId")} via socket')
             except Exception as e:
                 logger.error(f'Failed to emit new-message via socket: {e}')
@@ -763,7 +763,7 @@ def webhook_event():
                         'customer_info': conversation_doc.get('customer_info', {}),
                         'platform': 'facebook',
                         'bot_reply': conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else (conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else None),
-                    }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+                    }, organization_id=integration.get('organizationId'))
                         logger.info(f'Emitted update-conversation to account {account_id_owner} and org {integration.get("organizationId")} via socket')
             except Exception:
                 logger.error('Failed to emit update-conversation via socket')

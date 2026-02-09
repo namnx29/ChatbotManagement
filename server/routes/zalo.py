@@ -152,7 +152,7 @@ class ImageTooLargeError(Exception):
 
 PKCE_TTL = 600  # seconds
 
-def _emit_socket_to_account(event, payload, account_id, organization_id=None):
+def _emit_socket_to_account(event, payload, account_id=None, organization_id=None):
     """Emit a socket event to a specific account's room (SECURITY FIX).
     This ensures only authenticated users of the owning account receive the event.
     Prevents cross-account data leakage via WebSocket broadcasts.
@@ -163,14 +163,15 @@ def _emit_socket_to_account(event, payload, account_id, organization_id=None):
             return False
         
         emitted_rooms = []
-        acc_str = str(account_id)
-        room = f"account:{acc_str}"
-        try:
-            socketio.emit(event, payload, room=room)
-        except TypeError:
-            socketio.emit(event, payload, room=room)
-        emitted_rooms.append(room)
-        logger.debug(f"Emitted {event} to account room {room}")
+        if account_id:
+            acc_str = str(account_id)
+            room = f"account:{acc_str}"
+            try:
+                socketio.emit(event, payload, room=room)
+            except TypeError:
+                socketio.emit(event, payload, room=room)
+            emitted_rooms.append(room)
+            logger.debug(f"Emitted {event} to account room {room}")
 
         # Also emit to organization room so staff receive events
         if organization_id:
@@ -842,7 +843,7 @@ def webhook_event():
     try:
         if not deduped:
             # Emit to account room and organization room
-            _emit_socket_to_account('new-message', payload, account_id_owner, integration.get('organizationId'))
+            _emit_socket_to_account('new-message', payload, organization_id = integration.get('organizationId'))
             logger.info(f'Emitted new-message to account {account_id_owner} and org {integration.get("organizationId")} via socket')
 
             # Emit conversation update
@@ -859,7 +860,7 @@ def webhook_event():
                 'customer_info': conversation_doc.get('customer_info', {}),
                 'platform': 'zalo',
                 'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
-            }, account_id_owner, integration.get('organizationId'))
+            }, organization_id = integration.get('organizationId'))
             logger.info(f"Emitted update-conversation to account {account_id_owner} and org {integration.get('organizationId')} via socket")
             # If auto-reply enabled for this conversation, schedule background worker
             try:

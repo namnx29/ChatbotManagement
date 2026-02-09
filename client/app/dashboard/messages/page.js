@@ -975,7 +975,7 @@ export default function ChatManagementPage() {
         </div>
 
         {/* Conversation List */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, overflowY: 'auto', height: `calc(100vh - 350px)` }}>
           {!accountId ? (
             renderEmptyState(
               '⚠️',

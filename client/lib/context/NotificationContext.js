@@ -54,6 +54,7 @@ export function NotificationProvider({ children }) {
   const updateUnreadCount = useCallback((count) => {
     setUnreadCount(count);
     setHasUnread(count > 0);
+    console.log(count);
     
     if (count > 0) {
       document.title = `(${count}) Tin nhắn mới`;

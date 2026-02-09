@@ -1,6 +1,6 @@
 "use client";
 
-import { Layout, Input, Button, Radio, App, Card, Row, Col, Typography, Empty, Spin } from "antd";
+import { Layout, Input, Button, App, Card, Row, Col, Typography, Empty, Spin } from "antd";
 import {
   SearchOutlined,
   CloseOutlined,
@@ -12,11 +12,13 @@ import {
 } from "@ant-design/icons";
 import { useState, useEffect, useRef } from "react";
 import PlatformConnectTemplate from "@/lib/components/PlatformIntegrateTemplate";
+import { useRouter } from "next/navigation";
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
 
 export default function PlatformIntegrationPage() {
+  const router = useRouter();
   const [selectedPlatform, setSelectedPlatform] = useState("all");
   const { message, modal } = App.useApp();
 
@@ -200,14 +202,20 @@ export default function PlatformIntegrationPage() {
 
         if (oa_id && platform && !notifiedRef.current) {
           notifiedRef.current = true
-          // Refresh list first
-          const list = await fetchIntegrations(platform);
-          const found = (list || []).find((it) => it && it.oa_id === oa_id);
 
           if (status === "already") {
             message.info(`Tài khoản này đã được kết nối trước đó`);
           } else if (status === "connected") {
             message.success(`Kết nối thành công`);
+
+            setSelectedPlatform("all");
+
+            const chatbotId = getChatbotIdFromPath();
+            router.replace(
+              chatbotId
+                ? `/dashboard/training-chatbot/${chatbotId}/platform-intergrate`
+                : "/dashboard/platform-intergrate"
+            );
           } else if (status === "conflict") {
             if (conflict_type === "oa_assigned") {
               modal.confirm({

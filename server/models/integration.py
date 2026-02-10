@@ -89,6 +89,10 @@ class IntegrationModel:
         res = self.collection.find_one({'platform': platform, 'oa_id': oa_id})
         return self._serialize(res)
 
+    def find_by_organization_id(self, platform, org_id):
+        res = self.collection.find_one({'platform': platform, 'organizationId': org_id})
+        return self._serialize(res)
+
     def find_by_account(self, account_id, platform=None, chatbot_id=None):
         q = {'accountId': account_id}
         if platform:

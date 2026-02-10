@@ -448,7 +448,7 @@ class UserModel:
         #     query['parent_account_id'] = parent_account_id
         return self.collection.find_one(query)
 
-    def create_staff(self, parent_account_id, username, name, phone_number=None, password=None):
+    def create_staff(self, parent_account_id, username, name, phone_number=None, password=None, avatar_url=None, zalo_user_id=None):
         """
         Create a new staff account
         
@@ -475,14 +475,14 @@ class UserModel:
         # Check username uniqueness within parent account
         existing = self.collection.find_one({
             'parent_account_id': parent_account_id,
-            'username': username
+            'username': username,
         })
         if existing:
             raise ValueError('Username already exists')
-        
-        # Create staff account
+
         account_id = str(uuid.uuid4())
         
+        # Create staff account
         staff_data = {
             'accountId': account_id,
             'username': username,
@@ -494,13 +494,23 @@ class UserModel:
             'role': 'staff',
             'organizationId': parent_organization_id,
             'parent_account_id': parent_account_id,
-            'avatar_url': None,
+            'avatar_url': avatar_url,
             'created_by': parent_account_id,
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow(),
             'verification_token': None,
             'verification_token_expires_at': None,
+            'zalo_user_id': zalo_user_id
         }
+
+        from models.customer import CustomerModel
+        customer_model = CustomerModel(self.client)
+
+        customer_model.upsert_customer(
+            platform='zalo',
+            platform_specific_id=zalo_user_id,
+            is_staff=True
+        )
         
         try:
             result = self.collection.insert_one(staff_data)
@@ -591,6 +601,26 @@ class UserModel:
         if 'new_password' in updates and updates['new_password']:
             update_fields['password'] = updates['new_password']
         
+        if 'avatar_url' in updates:
+            update_fields['avatar_url'] = updates['avatar_url']
+        
+        if 'zalo_user_id' in updates and updates['zalo_user_id'] != staff.get('zalo_user_id'):
+            from models.customer import CustomerModel
+            customer_model = CustomerModel(self.client)
+
+            customer_model.upsert_customer(
+                platform='zalo',
+                platform_specific_id=updates['zalo_user_id'],
+                is_staff=True
+            )
+
+            customer_model.upsert_customer(
+                platform='zalo',
+                platform_specific_id=staff.get('zalo_user_id'),
+                is_staff=False
+            )
+            update_fields['zalo_user_id'] = updates['zalo_user_id']
+
         # Only update if there are changes
         if len(update_fields) == 1:  # Only updated_at
             return staff
@@ -742,3 +772,22 @@ class UserModel:
             return_document=True
         )
         return result
+
+    def find_by_organization_id(self, organization_id):
+        """
+        Find all users by organizationId
+
+        Args:
+            organization_id (str): Organization ID
+
+        Returns:
+            list: List of user documents
+        """
+        if not organization_id:
+            return []
+
+        cursor = self.collection.find({
+            'organizationId': organization_id
+        })
+
+        return list(cursor)

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import base64
 from io import BytesIO
 import threading
+from routes.zalo import _send_message_to_zalo
 
 facebook_bp = Blueprint('facebook', __name__)
 logger = logging.getLogger(__name__)
@@ -99,6 +100,51 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
         if not answer:
             logger.info(f"Auto-reply: no answer from API for question: {question}")
             return
+
+        #TODO: HANDOVER IF BOT CAN NOT ANSWER -> TURN TO USER
+        # answer = 'test'
+        # from models.integration import IntegrationModel
+        # from models.user import UserModel
+
+        # user_model = UserModel(mongo_client)
+        # users = user_model.find_by_organization_id(organization_id)
+
+        # integration_model = IntegrationModel(mongo_client)
+        # integration = integration_model.find_by_organization_id('zalo', organization_id)
+
+        # access_token = integration.get('access_token')
+
+        # results = []
+
+        # for user in users:
+        #     zalo_user_id = user.get('zalo_user_id')
+        #     if not zalo_user_id:
+        #         continue  # skip users without Zalo
+
+        #     try:
+        #         resp = _send_message_to_zalo(
+        #             access_token,
+        #             zalo_user_id,
+        #             message_text=answer
+        #         )
+        #         results.append({
+        #             'zalo_user_id': zalo_user_id,
+        #             'success': True,
+        #             'response': resp
+        #         })
+        #     except Exception as e:
+        #         results.append({
+        #             'zalo_user_id': zalo_user_id,
+        #             'success': False,
+        #             'error': str(e)
+        #         })
+
+        # return {
+        #     'success': True,
+        #     'sent': len([r for r in results if r['success']]),
+        #     'failed': len([r for r in results if not r['success']]),
+        #     'results': results
+        # }
 
         # Send answer back to customer via platform send helper
         try:

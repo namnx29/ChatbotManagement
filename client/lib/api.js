@@ -1276,3 +1276,32 @@ export async function sendWidgetConversationAttachment(accountId, convId, imageD
     throw error;
   }
 }
+
+
+export async function saveInfoConversation(accountId, oaId, customerId, phoneNumber, note) {
+  try {
+    if (!accountId) throw new Error('No accountId available');
+    const response = await fetch(`${API_BASE_URL}/api/integrations/customers/phone`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Account-Id': accountId,
+      },
+      body: JSON.stringify({
+        oa_id: oaId,
+        customer_id: customerId,
+        phone: phoneNumber,
+        note: note,
+      }),
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [POST /integrations/customers/phone-number]:', error);
+    throw error;
+  }
+}

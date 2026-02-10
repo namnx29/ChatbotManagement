@@ -160,6 +160,7 @@ def submit_lead():
             platform_specific_id=platform_specific_id,
             name=name,
             avatar=None,
+            phone=phone
         )
 
         oa_id = 'widget'  # channel identifier
@@ -225,7 +226,8 @@ def submit_lead():
                 'chatbot_info': {
                     'name': chatbot.get('name'),
                     'avatar': chatbot.get('avatar_url'),
-                }
+                },
+                'customer_info': sender_profile,
             }
             if socketio:
                 org_room = f"organization:{str(org_id)}"
@@ -241,7 +243,7 @@ def submit_lead():
                     'customer_id': customer_id,
                     'last_message': {'text': message, 'created_at': datetime.utcnow().isoformat() + 'Z'},
                     'unread_count': conv.get('unread_count', 0),
-                    'customer_info': conv.get('customer_info', {}),
+                    'customer_info': sender_profile,
                     'platform': 'widget',
                 }, room=org_room)
         except Exception as e:

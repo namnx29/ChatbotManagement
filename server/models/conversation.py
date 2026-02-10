@@ -188,6 +188,8 @@ class ConversationModel:
             update_doc['customer_info'] = {
                 'name': customer_info.get('name'),
                 'avatar': customer_info.get('avatar'),
+                'phone': customer_info.get('phone'),
+                'note': customer_info.get('note'),
             }
         
         # Build query to find existing conversation
@@ -475,6 +477,25 @@ class ConversationModel:
                 '$set': {
                     f'nicknames.{organization_id}': nick_name,
                     'updated_at': datetime.utcnow(),
+                }
+            },
+            return_document=True
+        )
+        return self._serialize(result)
+
+    def update_phone_note(self, oa_id, customer_id, user_id, phone, note, account_id=None, organization_id=None):
+        query = {'oa_id': oa_id, 'customer_id': customer_id}
+        if organization_id:
+            query['organizationId'] = organization_id
+        elif account_id:
+            query['accountId'] = account_id
+        result = self.collection.find_one_and_update(
+            query,
+            {
+                '$set': {
+                    'customer_info.phone': phone,
+                    'customer_info.note': note,
+                    'updated_at': datetime.utcnow(),                    
                 }
             },
             return_document=True

@@ -304,6 +304,8 @@ def get_all_conversations():
                     'platform': platform,
                     'name': nick_name or conv.get('display_name') or 'Khách hàng',
                     'avatar': conv.get('customer_info', {}).get('avatar') or None,
+                    'phone': conv.get('customer_info', {}).get('phone') or None,
+                    'note': conv.get('customer_info', {}).get('note') or None,
                     'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
                     'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
                     'unreadCount': conv.get('unread_count', 0),
@@ -356,6 +358,8 @@ def get_all_conversations():
                     'platform': platform,
                     'name': nick_name or conv.get('display_name') or 'Khách hàng',
                     'avatar': conv.get('customer_info', {}).get('avatar') or None,
+                    'phone': conv.get('customer_info', {}).get('phone') or None,
+                    'note': conv.get('customer_info', {}).get('note') or None,
                     'lastMessage': conv.get('last_message', {}).get('text') if conv.get('last_message') else None,
                     'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
                     'unreadCount': conv.get('unread_count', 0),
@@ -423,6 +427,59 @@ def update_conversation_nickname():
 
     except Exception as e:
         logger.error(f"Error updating nickname: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@integrations_bp.route('/customers/phone', methods=['POST'])
+def upsert_customer_by_phone():
+    """Upsert a customer by phone number."""
+    account_id = _get_account_id_from_request()
+    if not account_id:
+        return jsonify({'success': False, 'message': 'Account ID required'}), 400
+
+    data = request.json
+    oa_id = data.get('oa_id')
+    customer_id = data.get('customer_id')
+    phone = data.get('phone')
+    note = data.get('note')
+
+    try:
+        from models.customer import CustomerModel
+        from models.conversation import ConversationModel
+        from models.user import UserModel
+
+        user_model = UserModel(current_app.mongo_client)
+        conversation_model = ConversationModel(current_app.mongo_client)
+        customer_model = CustomerModel(current_app.mongo_client)
+
+        customer_data = customer_model.find_by_id(customer_id)
+        user_org_id = user_model.get_user_organization_id(account_id)
+
+        customer_doc = customer_model.upsert_customer(
+            platform=customer_data.get('platform') if customer_data else 'widget',
+            platform_specific_id=customer_data.get('platform_specific_id') if customer_data else customer_id.split(':', 1)[1] if ':' in customer_id else customer_id,
+            phone=phone
+        )
+
+        updated_conv = conversation_model.update_phone_note(
+            oa_id=oa_id, 
+            customer_id=customer_id, 
+            user_id=account_id, 
+            phone=phone,
+            note=note,
+            account_id=account_id,
+            organization_id=user_org_id  # Allow staff to update in shared organization
+        )
+
+        if not updated_conv:
+            return jsonify({'success': False, 'message': 'Conversation not found'}), 404
+
+        return jsonify({
+            'success': True, 
+            'data': conversation_model._serialize(updated_conv)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error upserting customer: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
     
 # Conversation Locking Endpoints

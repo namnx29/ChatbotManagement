@@ -59,6 +59,8 @@ export default function MembersPermissionsPage() {
 					username: staff.username,
 					phone: staff.phoneNumber || "",
 					is_active: typeof staff.is_active === 'undefined' ? true : !!staff.is_active,
+					avatar: staff.avatarUrl,
+					zaloUserId: staff.zaloUserId,
 				}));
 				setStaffList(formatted);
 			} else {
@@ -96,6 +98,8 @@ export default function MembersPermissionsPage() {
 			username: staff.username,
 			name: staff.name,
 			phoneNumber: staff.phone,
+			avatar: staff.avatar,
+			zaloUserId: staff.zaloUserId
 		});
 		setIsEditModalOpen(true);
 	};
@@ -220,7 +224,6 @@ export default function MembersPermissionsPage() {
 								message.error(res.message || 'Cập nhật trạng thái thất bại');
 							}
 						} catch (e) {
-							console.error('Toggle active failed', e);
 							message.error('Cập nhật trạng thái thất bại');
 						}
 					}}

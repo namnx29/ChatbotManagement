@@ -35,7 +35,7 @@ class CustomerModel:
                 pass
         return out
 
-    def upsert_customer(self, platform, platform_specific_id, name=None, avatar=None, phone=None):
+    def upsert_customer(self, platform, platform_specific_id, name=None, avatar=None, phone=None, is_staff=False):
         """
         Upsert a customer. platform_specific_id becomes the _id.
         Returns the customer document.
@@ -48,9 +48,9 @@ class CustomerModel:
         update_doc = {
             'platform': platform,
             'platform_specific_id': platform_specific_id,
+            'is_staff': is_staff,
             'updated_at': now,
         }
-        logger.info(f"Upserting customer with phone: {phone}")
         
         if name is not None:
             update_doc['name'] = name
@@ -83,4 +83,26 @@ class CustomerModel:
         """Find customer by platform and platform_specific_id"""
         customer_id = f"{platform}:{platform_specific_id}"
         return self.find_by_id(customer_id)
+    
+    def find_by_phone(self, platform, phone):
+        doc = self.collection.find_one({'phone': phone})
+        return self._serialize(doc)
 
+    def find_by_name_or_phone(self, platform=None, query=None):
+        """Find customers by name or phone"""
+        mongo_query = {
+            'is_staff': False
+        }   
+        # Filter by platform if provided
+        if platform:
+            mongo_query['platform'] = platform
+        
+        # Search by name OR phone
+        if query:
+            mongo_query['$or'] = [
+                {'name': {'$regex': query, '$options': 'i'}},
+                {'phone': {'$regex': query, '$options': 'i'}},
+            ]
+
+        cursor = self.collection.find(mongo_query).limit(20)
+        return [self._serialize(doc) for doc in cursor]

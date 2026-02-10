@@ -639,30 +639,9 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 				</div>
 			</div>
 
-			{conversation.current_handler && (
-				(() => {
-					return (
-						<Alert
-							title={title}
-							type="info"
-							showIcon
-							style={{ borderRadius: 0, border: 'none', height: '40px' }}
-						/>
-					);
-				})()
-			)}
-
-			{autoReply && (
-				<Alert
-					type="info"
-					showIcon
-					title="Bot đang trả lời tự động ..."
-					style={{ borderRadius: 0, border: 'none', height: '40px' }}
-				/>
-			)}
-
 			{/* Content Area - Split when sidebar is open */}
 			<div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
 				{/* Messages Section */}
 				<div style={{
 					display: 'flex',
@@ -671,6 +650,27 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 					transition: 'all 0.3s ease',
 					minWidth: 0
 				}}>
+					{conversation.current_handler && (
+						(() => {
+							return (
+								<Alert
+									title={title}
+									type="info"
+									showIcon
+									style={{ borderRadius: 0, border: 'none', height: '40px' }}
+								/>
+							);
+						})()
+					)}
+
+					{autoReply && (
+						<Alert
+							type="info"
+							showIcon
+							title="Bot đang trả lời tự động ..."
+							style={{ borderRadius: 0, border: 'none', height: '40px' }}
+						/>
+					)}
 					{/* Messages Area */}
 					<div
 						ref={messagesContainerRef}
@@ -916,11 +916,11 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 					display: showSidebar ? 'flex' : 'none',
 					background: 'white',
 					borderLeft: '1px solid #f0f0f0',
-					overflowY: 'auto',
 					flexShrink: 0,
 					animation: 'slideIn 0.3s ease',
 					flexDirection: 'column',
-					height: '100%',
+					height: '100%', // Parent takes full height
+					overflow: 'hidden' // Prevent double scrollbars
 				}}>
 					<Form
 						form={form}
@@ -930,13 +930,20 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							note: conversation.note || '',
 						}}
 						onFinish={handleSave}
-						style={{ flex: 1, overflowY: 'auto' }}
+						style={{
+							display: 'flex',
+							flexDirection: 'column',
+							height: '100%'
+						}} // Make Form a flex container
 					>
-						{/* Header */}
+						{/* 1. FIXED HEADER */}
 						<div style={{
-							padding: 20, borderBottom: '1px solid #f0f0f0', display: 'flex',
+							padding: 20,
+							borderBottom: '1px solid #f0f0f0',
+							display: 'flex',
 							alignItems: 'center',
-							position: 'relative'
+							position: 'relative',
+							flexShrink: 0 // Prevents header from squishing
 						}}>
 							<div style={{ display: 'flex', gap: 12 }}>
 								<Avatar size={40} src={conversation.avatar}>
@@ -988,20 +995,20 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							</div>
 						</div>
 
-						{/* Content */}
-						<div style={{ padding: 16, flex: 1, overflowY: 'auto' }}>
-							{/* Phone */}
+						{/* 2. SCROLLABLE CONTENT AREA */}
+						<div style={{
+							padding: 16,
+							flex: 1,
+							overflowY: 'auto' // Only this part scrolls
+						}}>
 							<Form.Item
 								label="SĐT"
 								name="phone"
-								rules={[
-									{ pattern: /^[0-9+ ]*$/, message: 'Số điện thoại không hợp lệ' },
-								]}
+								rules={[{ pattern: /^[0-9+ ]*$/, message: 'Số điện thoại không hợp lệ' }]}
 							>
 								<Input placeholder="Nhập số điện thoại" />
 							</Form.Item>
 
-							{/* Note */}
 							<Form.Item label="Ghi chú" name="note">
 								<TextArea
 									placeholder="Nhập ghi chú tại đây..."
@@ -1010,14 +1017,15 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 							</Form.Item>
 						</div>
 
-						{/* Actions */}
-						<div style={{ padding: 16, display: 'flex', gap: 12 }}>
-							<Button
-								onClick={() => setShowSidebar(false)}
-								style={{ flex: 1 }}
-							>
-								Đóng
-							</Button>
+						{/* 3. FIXED FOOTER BUTTONS */}
+						<div style={{
+							padding: 20,
+							display: 'flex',
+							gap: 12,
+							borderTop: '1px solid #f0f0f0', // Optional: separator
+							background: 'white',
+							flexShrink: 0 // Prevents buttons from squishing
+						}}>
 							<Button
 								type="primary"
 								htmlType="submit"
@@ -1028,6 +1036,12 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 								}}
 							>
 								Lưu
+							</Button>
+							<Button
+								onClick={() => setShowSidebar(false)}
+								style={{ flex: 1 }}
+							>
+								Đóng
 							</Button>
 						</div>
 					</Form>

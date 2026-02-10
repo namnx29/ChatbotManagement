@@ -974,6 +974,8 @@ export async function createStaff(staffData) {
         name: staffData.name,
         phoneNumber: staffData.phoneNumber,
         password: staffData.password,
+        avatar: staffData.avatar || null,
+        zaloUserId: staffData.zaloUserId
       }),
     });
 
@@ -1139,6 +1141,32 @@ export async function toggleStaffActive(staffAccountId, isActive) {
     return result;
   } catch (error) {
     console.error('API Error [POST /user/staff/:id/active]:', error);
+    throw error;
+  }
+}
+
+export async function searchStaff(query) {
+  try {
+    const accountId = typeof window !== 'undefined' ? localStorage.getItem('accountId') : null;
+    if (!accountId) throw new Error('No accountId available');
+
+    const url = new URL(`${API_BASE_URL}/api/user/staff/search`);
+    url.searchParams.append('q', query);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'X-Account-Id': accountId,
+      },
+    });
+
+    const result = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(result.message || `HTTP ${response.status}: ${response.statusText}`);
+    }
+    return result;
+  } catch (error) {
+    console.error('API Error [GET /user/staff/search]:', error);
     throw error;
   }
 }

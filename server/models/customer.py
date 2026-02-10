@@ -35,7 +35,7 @@ class CustomerModel:
                 pass
         return out
 
-    def upsert_customer(self, platform, platform_specific_id, name=None, avatar=None):
+    def upsert_customer(self, platform, platform_specific_id, name=None, avatar=None, phone=None):
         """
         Upsert a customer. platform_specific_id becomes the _id.
         Returns the customer document.
@@ -50,11 +50,14 @@ class CustomerModel:
             'platform_specific_id': platform_specific_id,
             'updated_at': now,
         }
+        logger.info(f"Upserting customer with phone: {phone}")
         
         if name is not None:
             update_doc['name'] = name
         if avatar is not None:
             update_doc['avatar'] = avatar
+        if phone is not None:
+            update_doc['phone'] = phone
         
         # Upsert: update if exists, insert if not
         result = self.collection.find_one_and_update(

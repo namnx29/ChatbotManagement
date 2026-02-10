@@ -198,7 +198,9 @@ export default function ChatManagementPage() {
 
     // Update the conversations list
     updateConversationInList(updatedConversation.id, {
-      name: updatedConversation.name
+      name: updatedConversation.name,
+      phone: updatedConversation.phone,
+      note: updatedConversation.note,
     });
   }, [updateConversationInList]);
 
@@ -263,6 +265,7 @@ export default function ChatManagementPage() {
             oa_id: payload.oa_id,
             platform_status: { is_connected: true, disconnected_at: null },
             chatbot_info: payload.chatbot_info || {},
+            phone: payload.customer_info?.phone || null,
           }, ...prev];
         }
 
@@ -517,6 +520,8 @@ export default function ChatManagementPage() {
           platform_status: c.platform_status || { is_connected: true, disconnected_at: null },
           chatbot_info: c.chatbot_info || {},
           bot_reply: c.bot_reply || null,
+          phone: c.phone || null,
+          note: c.note || '',
         }));
 
         const sortedConversations = allConversations.sort((a, b) => {
@@ -801,9 +806,26 @@ export default function ChatManagementPage() {
 
   const filteredConversations = useMemo(() => {
     const query = debouncedSearch.trim().toLowerCase();
+
     return conversations.filter(conv => {
-      if (filterChannel !== 'all' && conv.platform !== filterChannel) return false;
-      if (query && !conv.name.toLowerCase().includes(query)) return false;
+      // Channel filter
+      if (filterChannel !== 'all' && conv.platform !== filterChannel) {
+        return false;
+      }
+
+      // Search filter
+      if (query) {
+        const name = (conv.name || '').toLowerCase();
+        const phone =
+          (conv.phone ||
+            conv.customer_info?.phone ||
+            '').toLowerCase();
+
+        if (!name.includes(query) && !phone.includes(query)) {
+          return false;
+        }
+      }
+
       return true;
     });
   }, [conversations, filterChannel, debouncedSearch]);

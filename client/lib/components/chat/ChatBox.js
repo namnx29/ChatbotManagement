@@ -1,6 +1,6 @@
 'use client';
 
-import { Select, Space, Avatar, Input, Button, Switch, Image, Alert, App, Modal } from 'antd';
+import { Avatar, Input, Button, Switch, Image, Alert, App, Modal, Form } from 'antd';
 import {
 	SendOutlined,
 	PictureOutlined,
@@ -9,14 +9,13 @@ import {
 	EditOutlined,
 	TagFilled,
 	ArrowDownOutlined,
-	DownOutlined,
 	GlobalOutlined
 } from '@ant-design/icons';
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/vi';
 import CustomerNameChangeModal from '@/lib/components/popup/CustomerNameChangeModal';
-import { getAvatarUrl, fetchProfile, setConversationBotReply } from '@/lib/api';
+import { getAvatarUrl, fetchProfile, setConversationBotReply, saveInfoConversation } from '@/lib/api';
 
 dayjs.locale('vi');
 const { TextArea } = Input;
@@ -86,6 +85,7 @@ const getRawDate = (msg) => {
 
 export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScrollPositionChange, onConversationUpdate, socket, accountId }) {
 	const { modal, message } = App.useApp();
+	const [form] = Form.useForm();
 	const [ChatMessage, setChatMessage] = useState('');
 	const [autoReply, setAutoReply] = useState(() => {
 		// initialize from conversation flag (support both snake and hyphen)
@@ -97,8 +97,15 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 
 	// Keep autoReply in sync with conversation prop updates (realtime via socket)
 	useEffect(() => {
+
 		try {
 			if (!conversation) return;
+
+			form.setFieldsValue({
+				phone: conversation.phone || '',
+				note: conversation.note || '',
+			});
+
 			if (conversation && conversation.bot_reply !== undefined) setAutoReply(!!conversation.bot_reply);
 		} catch (e) {
 			// ignore
@@ -442,6 +449,26 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 				}
 			},
 		});
+	};
+
+	const handleSave = async (values) => {
+		try {
+			const accountId = localStorage.getItem('accountId');
+
+			const result = await saveInfoConversation(accountId, conversation.oa_id, conversation.customer_id, values.phone, values.note);
+			if (!result.success) {
+				throw new Error(result.message || 'Failed to save conversation info');
+			}
+			onConversationUpdate({
+				...conversation,
+				phone: values.phone,
+				note: values.note,
+			});
+
+			message.success('Lưu thông tin thành công');
+		} catch (err) {
+			message.error('Lưu thất bại');
+		}
 	};
 
 	return (
@@ -884,225 +911,127 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 				</div>
 
 				{/* Right Sidebar - Slides in from right */}
-				{showSidebar && (
-					<div style={{
-						width: '320px',
-						background: 'white',
-						borderLeft: '1px solid #f0f0f0',
-						overflowY: 'auto',
-						flexShrink: 0,
-						animation: 'slideIn 0.3s ease',
-						display: 'flex',
-						flexDirection: 'column',
-						height: '100%',
-					}}>
-						<div style={{ flex: 1, overflowY: 'auto' }}>
-							{/* Sidebar Header */}
-							<div style={{
-								padding: '20px',
-								borderBottom: '1px solid #f0f0f0',
-								display: 'flex',
-								alignItems: 'center',
-								position: 'relative'
-							}}>
-								<div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-									<Avatar size={40} src={conversation.avatar}>
-										{conversation.name[0]}
-									</Avatar>
-									<div>
-										<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-											<span style={{ fontWeight: '600', fontSize: '16px' }}>
-												{conversation.name}
-											</span>
-											<Button type="text" size="small" onClick={handleNameModalOpen} icon={<EditOutlined />} />
-										</div>
-										<div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-											{conversation.chatbot_info ? (
-												<>
-													<Avatar size={16} src={getAvatarUrl(conversation.chatbot_info.avatar)} />
-													<span style={{ fontSize: '13px', color: '#666' }}>
-														{conversation.chatbot_info.name}
-													</span>
-												</>
-											) : (
-												<>
-													{platformIcons[conversation.platform]}
-													<span style={{ fontSize: '13px', color: '#666' }}>
-														{conversation.platform === 'facebook' ? 'Facebook' :
-															conversation.platform === 'instagram' ? 'Instagram' :
-																conversation.platform === 'zalo' ? 'Zalo' : 'Website'}
-													</span>
-												</>
-											)}
-											{conversation.tag && (
-												<TagFilled style={{ color: tagColors['completed'] }} />
-											)}
-											{conversation.secondaryTag && (
-												<div
-													style={{
-														background: '#f0f0f0',
-														padding: '2px 6px',
-														borderRadius: '4px',
-														fontSize: '11px',
-														color: '#666',
-													}}
-												>
-													{conversation.secondaryTag}
-												</div>
-											)}
-										</div>
-									</div>
-								</div>
-							</div>
-
-							<div style={{ padding: '16px' }}>
-								{/* Tags Section */}
-								<div style={{ marginBottom: '18px' }}>
-									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
-										SĐT
-									</div>
-									<Input
-										value={conversation.phone || ''}
-										placeholder="Nhập số điện thoại"
-										style={{ width: '100%' }}
-									/>
-								</div>
-								<div style={{ marginBottom: '18px' }}>
-									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
-										Tag
-									</div>
-									<Select
-										defaultValue="interacting"
-										style={{ width: '100%' }}
-										options={[
-											{
-												value: 'completed',
-												label: (
-													<Space>
-														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#52c41a' }} />
-														Chốt đơn
-													</Space>
-												),
-											},
-											{
-												value: 'bot-failed',
-												label: (
-													<Space>
-														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#ff4d4f' }} />
-														Bot không trả lời được
-													</Space>
-												),
-											},
-											{
-												value: 'no-response',
-												label: (
-													<Space>
-														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#8c8c8c' }} />
-														Khách không phản hồi
-													</Space>
-												),
-											},
-											{
-												value: 'interacting',
-												label: (
-													<Space>
-														<div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fa8c16' }} />
-														Đang tương tác
-													</Space>
-												),
-											},
-										]}
-									/>
-								</div>
-
-								{/* Status Section (Tư vấn) */}
+				<div style={{
+					width: showSidebar ? 320 : 0,
+					display: showSidebar ? 'flex' : 'none',
+					background: 'white',
+					borderLeft: '1px solid #f0f0f0',
+					overflowY: 'auto',
+					flexShrink: 0,
+					animation: 'slideIn 0.3s ease',
+					flexDirection: 'column',
+					height: '100%',
+				}}>
+					<Form
+						form={form}
+						layout="vertical"
+						initialValues={{
+							phone: conversation.phone || '',
+							note: conversation.note || '',
+						}}
+						onFinish={handleSave}
+						style={{ flex: 1, overflowY: 'auto' }}
+					>
+						{/* Header */}
+						<div style={{
+							padding: 20, borderBottom: '1px solid #f0f0f0', display: 'flex',
+							alignItems: 'center',
+							position: 'relative'
+						}}>
+							<div style={{ display: 'flex', gap: 12 }}>
+								<Avatar size={40} src={conversation.avatar}>
+									{conversation.name[0]}
+								</Avatar>
 								<div>
-									<div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', color: '#333' }}>
-										Trạng thái
+									<div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+										<span style={{ fontWeight: '600', fontSize: '16px' }}>
+											{conversation.name}
+										</span>
+										<Button type="text" size="small" onClick={handleNameModalOpen} icon={<EditOutlined />} />
 									</div>
-									<Select
-										defaultValue="tu-van"
-										style={{ width: '100%', marginBottom: '16px' }}
-										optionLabelProp="label" // This tells AntD to only show the 'label' prop in the selection box
-										suffixIcon={<DownOutlined style={{ fontSize: '10px', color: '#bfbfbf' }} />}
-									>
-										<Select.Option value="tu-van" label="Tư vấn">
-											<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-												<span>Tư vấn</span>
-												<div style={{ width: 24, height: 6, borderRadius: 3, background: '#bae7ff' }} />
+									<div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+										{conversation.chatbot_info ? (
+											<>
+												<Avatar size={16} src={getAvatarUrl(conversation.chatbot_info.avatar)} />
+												<span style={{ fontSize: '13px', color: '#666' }}>
+													{conversation.chatbot_info.name}
+												</span>
+											</>
+										) : (
+											<>
+												{platformIcons[conversation.platform]}
+												<span style={{ fontSize: '13px', color: '#666' }}>
+													{conversation.platform === 'facebook' ? 'Facebook' :
+														conversation.platform === 'instagram' ? 'Instagram' :
+															conversation.platform === 'zalo' ? 'Zalo' : 'Website'}
+												</span>
+											</>
+										)}
+										{conversation.tag && (
+											<TagFilled style={{ color: tagColors['completed'] }} />
+										)}
+										{conversation.secondaryTag && (
+											<div
+												style={{
+													background: '#f0f0f0',
+													padding: '2px 6px',
+													borderRadius: '4px',
+													fontSize: '11px',
+													color: '#666',
+												}}
+											>
+												{conversation.secondaryTag}
 											</div>
-										</Select.Option>
-
-										<Select.Option value="tiem-nang" label="Tiềm năng">
-											<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-												<span>Tiềm năng</span>
-												<div style={{ width: 24, height: 6, borderRadius: 3, background: '#ffe58f' }} />
-											</div>
-										</Select.Option>
-
-										<Select.Option value="chot-don" label="Chốt đơn">
-											<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-												<span>Chốt đơn</span>
-												<div style={{ width: 24, height: 6, borderRadius: 3, background: '#b7eb8f' }} />
-											</div>
-										</Select.Option>
-									</Select>
-								</div>
-
-								<div style={{ marginBottom: '14px' }}>
-									<div style={{
-										fontWeight: '600',
-										fontSize: '14px',
-										marginBottom: '8px',
-										color: '#333'
-									}}>
-										Ghi chú
+										)}
 									</div>
-									<TextArea
-										placeholder="Nhập ghi chú tại đây..."
-										autoSize={{ minRows: 6, maxRows: 6 }}
-										style={{
-											borderRadius: '6px',
-											fontSize: '13px',
-											border: '1px solid #d9d9d9'
-										}}
-									/>
 								</div>
 							</div>
 						</div>
 
-						{/* Action Buttons */}
-						<div style={{
-							padding: '16px',
-							display: 'flex',
-							gap: '12px',
-							background: 'white'
-						}}>
+						{/* Content */}
+						<div style={{ padding: 16, flex: 1, overflowY: 'auto' }}>
+							{/* Phone */}
+							<Form.Item
+								label="SĐT"
+								name="phone"
+								rules={[
+									{ pattern: /^[0-9+ ]*$/, message: 'Số điện thoại không hợp lệ' },
+								]}
+							>
+								<Input placeholder="Nhập số điện thoại" />
+							</Form.Item>
+
+							{/* Note */}
+							<Form.Item label="Ghi chú" name="note">
+								<TextArea
+									placeholder="Nhập ghi chú tại đây..."
+									autoSize={{ minRows: 6, maxRows: 6 }}
+								/>
+							</Form.Item>
+						</div>
+
+						{/* Actions */}
+						<div style={{ padding: 16, display: 'flex', gap: 12 }}>
 							<Button
 								onClick={() => setShowSidebar(false)}
-								style={{
-									flex: 1,
-									borderRadius: '8px',
-									height: '40px'
-								}}
+								style={{ flex: 1 }}
 							>
 								Đóng
 							</Button>
 							<Button
 								type="primary"
+								htmlType="submit"
 								style={{
 									flex: 1,
 									background: '#6c3fb5',
 									borderColor: '#6c3fb5',
-									borderRadius: '8px',
-									height: '40px'
 								}}
 							>
 								Lưu
 							</Button>
 						</div>
-					</div>
-				)}
+					</Form>
+				</div>
 			</div>
 
 			<CustomerNameChangeModal

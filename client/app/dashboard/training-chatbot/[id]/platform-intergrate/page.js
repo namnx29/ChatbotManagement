@@ -238,7 +238,7 @@ export default function PlatformIntegrationPage() {
           window.history.replaceState({}, "", url.toString());
         }
       } catch (e) {
-
+        message.error("Lỗi khi xử lý phản hồi từ nền tảng");
       }
     };
     init();

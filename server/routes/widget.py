@@ -29,64 +29,67 @@ def _auto_reply_worker_widget(mongo_client, oa_id, customer_id, conversation_id,
             return
 
         # Call external chat API (microtunchat)
-        # try:
-        #     resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120)
-        #     data = resp.json() if resp.status_code == 200 else {}
-        # except Exception as e:
-        #     logger.error(f"Widget auto-reply API request failed: {e}")
-        #     return
+        try:
+            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120)
+            data = resp.json() if resp.status_code == 200 else {}
+        except Exception as e:
+            logger.error(f"Widget auto-reply API request failed: {e}")
+            return
 
-        # answer = data.get('answer') if isinstance(data, dict) else None
-        # if not answer:
-        #     logger.info(f"Widget auto-reply: no answer from API for question: {question}")
-        #     return
+        answer = data.get('answer') if isinstance(data, dict) else None
+        if not answer:
+            logger.info(f"Widget auto-reply: no answer from API for question: {question}")
+            return
         
         #TODO: HANDOVER IF BOT CAN NOT ANSWER -> TURN TO USER
-        answer = "test"
-        from models.integration import IntegrationModel
-        from models.user import UserModel
+        # answer = "Luuvaodbtest"
+        # handover = True
+        # sent_doc = None
+        # if handover:
+        #     from models.integration import IntegrationModel
+        #     from models.user import UserModel
 
-        user_model = UserModel(mongo_client)
-        users = user_model.find_by_organization_id(organization_id)
+        #     user_model = UserModel(mongo_client)
+        #     users = user_model.find_by_organization_id(organization_id)
 
-        integration_model = IntegrationModel(mongo_client)
-        integration = integration_model.find_by_organization_id('zalo', organization_id)
+        #     integration_model = IntegrationModel(mongo_client)
+        #     integration = integration_model.find_by_organization_id('zalo', organization_id)
 
-        access_token = integration.get('access_token')
+        #     access_token = integration.get('access_token')
 
-        results = []
+        #     results = []
 
-        for user in users:
-            zalo_user_id = user.get('zalo_user_id')
-            if not zalo_user_id:
-                continue  # skip users without Zalo
+        #     for user in users:
+        #         zalo_user_id = user.get('zalo_user_id')
+        #         if not zalo_user_id:
+        #             continue  # skip users without Zalo
 
-            try:
-                resp = _send_message_to_zalo(
-                    access_token,
-                    zalo_user_id,
-                    message_text=answer
-                )
-                results.append({
-                    'zalo_user_id': zalo_user_id,
-                    'success': True,
-                    'response': resp
-                })
-            except Exception as e:
-                results.append({
-                    'zalo_user_id': zalo_user_id,
-                    'success': False,
-                    'error': str(e)
-                })
+        #         try:
+        #             resp = _send_message_to_zalo(
+        #                 access_token,
+        #                 zalo_user_id,
+        #                 message_text=answer
+        #             )
+        #             results.append({
+        #                 'zalo_user_id': zalo_user_id,
+        #                 'success': True,
+        #                 'response': resp
+        #             })
+        #         except Exception as e:
+        #             results.append({
+        #                 'zalo_user_id': zalo_user_id,
+        #                 'success': False,
+        #                 'error': str(e)
+        #             })
+        # else:
+            # return {
+            #     'success': True,
+            #     'sent': len([r for r in results if r['success']]),
+            #     'failed': len([r for r in results if not r['success']]),
+            #     'results': results
+            # }
 
-        return {
-            'success': True,
-            'sent': len([r for r in results if r['success']]),
-            'failed': len([r for r in results if not r['success']]),
-            'results': results
-        }
-
-        # Persist outgoing bot message and update conversation
+            # Persist outgoing bot message and update conversation
         try:
             from models.message import MessageModel
             from models.conversation import ConversationModel
@@ -131,6 +134,7 @@ def _auto_reply_worker_widget(mongo_client, oa_id, customer_id, conversation_id,
                 'conversation_id': conversation_id,
                 'sent_at': datetime.utcnow().isoformat() + 'Z',
                 'direction': 'out',
+                # 'handover': handover
             }
             # Prefer direct socketio emit if available (no Flask app context needed)
             if socketio:
@@ -291,9 +295,31 @@ def submit_lead():
                     'unread_count': conv.get('unread_count', 0),
                     'customer_info': sender_profile,
                     'platform': 'widget',
+                    'bot_reply': conv.get('bot_reply'),
+                    'tags': conv.get('tags'),
                 }, room=org_room)
         except Exception as e:
             logger.debug(f"Widget socket emit failed: {e}")
+
+        # 6. Auto-reply for widget conversations (bot mode)
+        try:
+            # The conversation was just created with bot_reply=True, so trigger auto-reply for incoming customer message with text
+            if message:
+                try:
+                    mongo_client = current_app.mongo_client
+                    socketio = getattr(current_app, 'socketio', None)
+                    t = threading.Thread(
+                        target=_auto_reply_worker_widget,
+                        args=(mongo_client, oa_id, customer_id, conversation_id_str, message, org_id, socketio),
+                        daemon=True
+                    )
+                    t.start()
+                    logger.info(f"Scheduled widget auto-reply worker for new conversation {conversation_id_str}")
+                except Exception as e:
+                    logger.error(f"Failed to start widget auto-reply worker thread: {e}")
+        except Exception:
+            # Do not fail the main request if auto-reply scheduling fails
+            pass
 
         return jsonify({'success': True, 'conversation_id': conversation_id_str, 'conv_id': conv_id_formatted, 'message': 'Lead submitted', 'message_doc': message_doc}), 200
 
@@ -597,6 +623,22 @@ def send_conversation_message(conv_id):
             }
             
             _emit_socket('new-message', payload, account_id=account_id, organization_id=org_id)
+            # also emit update-conversation so sidebar/tags stay up-to-date
+            try:
+                refreshed_conv = conversation_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=org_id)
+                _emit_socket('update-conversation', {
+                    'conversation_id': conversation_id,
+                    'conv_id': conv_id,
+                    'oa_id': oa_id,
+                    'customer_id': customer_id,
+                    'last_message': {'text': text if text else "Tệp đính kèm", 'created_at': datetime.utcnow().isoformat() + 'Z'},
+                    'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
+                    'customer_info': sender_profile,
+                    'platform': 'widget',
+                    'tags': refreshed_conv.get('tags') if refreshed_conv else None,
+                }, account_id=account_id, organization_id=org_id)
+            except Exception:
+                pass
             
             # Atomic claim: first person to reply handles the chat (staff side only)
             if account_id:
@@ -607,6 +649,21 @@ def send_conversation_message(conv_id):
                         'conversation_id': conversation_id,
                         'handler': claimed.get('current_handler')
                     }, account_id=account_id, organization_id=org_id)
+
+                    # Also emit update-conversation with tags so UIs update in real-time
+                    try:
+                        refreshed_conv = conversation_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=org_id)
+                        if refreshed_conv:
+                            _emit_socket('update-conversation', {
+                                'conversation_id': conversation_id,
+                                'conv_id': conv_id,
+                                'oa_id': oa_id,
+                                'customer_id': customer_id,
+                                'tags': refreshed_conv.get('tags'),
+                                'platform': 'widget',
+                            }, account_id=account_id, organization_id=org_id)
+                    except Exception:
+                        pass
 
         except Exception as se:
             logger.debug(f"Widget socket emit failed: {se}")
@@ -708,6 +765,10 @@ def set_widget_conversation_bot_reply(conv_id):
 
         # Emit update so other clients (account owner and org members) get realtime state
         try:
+            # Refresh conversation to ensure we get latest tags
+            refreshed_conv = conversation_model.find_by_oa_and_customer(
+                oa_id, customer_id, organization_id=user_org_id, account_id=account_id
+            ) or updated
             conv_id_legacy = conv_id
             org_fallback = user_org_id or conv.get('organizationId')
             _emit_socket(
@@ -718,6 +779,7 @@ def set_widget_conversation_bot_reply(conv_id):
                     'oa_id': oa_id,
                     'customer_id': customer_id,
                     'bot_reply': updated.get('bot_reply') if updated and 'bot_reply' in updated else enabled_bool,
+                    'tags': refreshed_conv.get('tags') if refreshed_conv else None,
                 },
                 account_id=account_id,
                 organization_id=org_fallback,

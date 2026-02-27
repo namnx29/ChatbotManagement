@@ -202,6 +202,15 @@ def create_app(env=None):
             if socketio and user_org:
                 payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id')}
                 socketio.emit('conversation-unlocked', payload, room=f"organization:{user_org}")
+                # also notify UI of tag change after unlock
+                try:
+                    socketio.emit('update-conversation', {
+                        'conversation_id': updated.get('_id'),
+                        'conv_id': conv_id,
+                        'tags': updated.get('tags'),
+                    }, room=f"organization:{user_org}")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Error in complete-conversation handler: {e}")
 

@@ -457,9 +457,12 @@ export default function ChatManagementPage() {
           }
           if (payload.bot_reply !== undefined) {
             updated.bot_reply = payload.bot_reply;
-          } else if (payload['bot-reply'] !== undefined) {
+          	  } else if (payload['bot-reply'] !== undefined) {
             updated.bot_reply = payload['bot-reply'];
           }
+            if (payload.tags !== undefined) {
+              updated.tags = payload.tags;
+            }
           return updated;
         }));
 
@@ -469,7 +472,8 @@ export default function ChatManagementPage() {
             ...prev,
             lastMessage: payload.last_message?.text || prev.lastMessage,
             time: payload.last_message?.created_at || prev.time,
-            bot_reply: payload.bot_reply !== undefined ? payload.bot_reply : (payload['bot-reply'] !== undefined ? payload['bot-reply'] : prev.bot_reply)
+            bot_reply: payload.bot_reply !== undefined ? payload.bot_reply : (payload['bot-reply'] !== undefined ? payload['bot-reply'] : prev.bot_reply),
+            tags: payload.tags !== undefined ? payload.tags : prev.tags
           } : prev);
         }
       } catch (e) {
@@ -519,7 +523,8 @@ export default function ChatManagementPage() {
           lock_expires_at: c.lock_expires_at || null,
           platform_status: c.platform_status || { is_connected: true, disconnected_at: null },
           chatbot_info: c.chatbot_info || {},
-          bot_reply: c.bot_reply || null,
+            bot_reply: c.bot_reply || null,
+            tags: c.tags || null,
           phone: c.phone || null,
           note: c.note || '',
         }));

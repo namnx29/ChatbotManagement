@@ -310,6 +310,7 @@ def get_all_conversations():
                     'time': conv.get('last_message', {}).get('created_at') if conv.get('last_message') else conv.get('updated_at'),
                     'unreadCount': conv.get('unread_count', 0),
                     'bot_reply': conv.get('bot-reply') if 'bot-reply' in conv else (conv.get('bot_reply') if 'bot_reply' in conv else None),
+                    'tags': conv.get('tags'),
                     'platform_status': {
                         'is_connected': is_connected,
                         'disconnected_at': disconnected_at.isoformat() + 'Z' if disconnected_at else None
@@ -365,6 +366,7 @@ def get_all_conversations():
                     'unreadCount': conv.get('unread_count', 0),
                     # Respect stored bot_reply flag for widget conversations as well
                     'bot_reply': conv.get('bot-reply') if 'bot-reply' in conv else (conv.get('bot_reply') if 'bot_reply' in conv else None),
+                    'tags': conv.get('tags'),
                     'platform_status': {
                         'is_connected': True,  # Widget is always "connected"
                         'disconnected_at': None

@@ -32,10 +32,9 @@ const platformIcons = {
 };
 
 const tagColors = {
-	completed: '#52c41a',
 	'bot-failed': '#ff4d4f',
-	'no-response': '#8c8c8c',
-	interacting: '#fa8c16',
+	'bot-interacting': '#fa8c16',
+	'staff-interacting': '#6c3fb5',
 };
 
 function parseToDate(s) {
@@ -169,8 +168,8 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 							>
 								{conversation.name}
 							</span>
-							{conversation.tag && (
-								<TagFilled style={{ color: tagColors[conversation.tag] }} />
+							{conversation.tags && (
+								<TagFilled style={{ color: tagColors[conversation.tags] }} />
 							)}
 						</div>
 						<Dropdown menu={{ items: menuItems }} trigger={['click']}>

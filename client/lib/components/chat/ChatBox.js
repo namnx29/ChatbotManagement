@@ -48,10 +48,9 @@ const platformIcons = {
 };
 
 const tagColors = {
-	completed: '#52c41a',
 	'bot-failed': '#ff4d4f',
-	'no-response': '#8c8c8c',
-	interacting: '#fa8c16',
+	'bot-interacting': '#fa8c16',
+	'staff-interacting': '#6c3fb5',
 };
 
 const getDateLabel = (date) => {
@@ -513,8 +512,8 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 									</span>
 								</>
 							)}
-							{conversation.tag && (
-								<TagFilled style={{ color: tagColors['completed'] }} />
+							{conversation.tags && (
+								<TagFilled style={{ color: tagColors[conversation.tags] || tagColors['interacting'] }} />
 							)}
 							{conversation.secondaryTag && (
 								<div
@@ -974,8 +973,8 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 												</span>
 											</>
 										)}
-										{conversation.tag && (
-											<TagFilled style={{ color: tagColors['completed'] }} />
+										{conversation.tags && (
+											<TagFilled style={{ color: tagColors[conversation.tags] || tagColors['interacting'] }} />
 										)}
 										{conversation.secondaryTag && (
 											<div

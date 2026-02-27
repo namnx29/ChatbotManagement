@@ -73,7 +73,7 @@ class MessageModel:
 
         return out
 
-    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None, organization_id=None):
+    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None, organization_id=None, tags=None):
         """
         Add a message. 
         - conversation_id: Optional ObjectId string of conversation. If provided, this is the new way.
@@ -118,6 +118,12 @@ class MessageModel:
                 # DON'T store conversation_id if conversion fails
                 # Message will be stored but unfindable by conversation_id
         
+        # Store tag if provided (single tag string)
+        if tags:
+            try:
+                doc['tags'] = str(tags)
+            except Exception:
+                doc['tags'] = tags
         res = self.collection.insert_one(doc)
         doc['_id'] = res.inserted_id
         try:

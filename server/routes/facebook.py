@@ -99,6 +99,28 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
         answer = data.get('answer') if isinstance(data, dict) else None
         if not answer:
             logger.info(f"Auto-reply: no answer from API for question: {question}")
+            # Mark conversation as bot-failed so UI shows handover-needed
+            try:
+                from models.conversation import ConversationModel
+                conv_model = ConversationModel(mongo_client)
+                conv = conv_model.find_by_oa_and_customer(oa_id, f"facebook:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
+                if conv and conv.get('_id'):
+                    conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    try:
+                        org_fallback = organization_id or (conv.get('organizationId') if conv else None)
+                        payload = {
+                            'conversation_id': conv.get('_id'),
+                            'conv_id': f"facebook:{oa_id}:{customer_platform_id}",
+                            'oa_id': oa_id,
+                            'customer_id': f"facebook:{customer_platform_id}",
+                            'tags': 'bot-failed',
+                            'platform': 'facebook',
+                        }
+                        _emit_socket('update-conversation', payload, account_id=account_id_owner, organization_id=org_fallback)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             return
 
         #TODO: HANDOVER IF BOT CAN NOT ANSWER -> TURN TO USER
@@ -167,6 +189,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                 direction='out',
                 text=answer,
                 metadata={'auto_reply': True, 'source': 'external_api', 'api_response': send_resp},
+                tags='bot-interacting',
                 is_read=True,
                 conversation_id=conversation_id,
                 account_id=account_id_owner,
@@ -224,6 +247,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                         'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
                         'customer_info': conversation_doc.get('customer_info', {}) if conversation_doc else {},
                         'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
+                        'tags': conversation_doc.get('tags') if conversation_doc else None,
                         'platform': 'facebook',
                     }, room=acc_room)
                     if org_fallback:
@@ -237,6 +261,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                             'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
                             'customer_info': conversation_doc.get('customer_info', {}) if conversation_doc else {},
                             'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
+                            'tags': conversation_doc.get('tags') if conversation_doc else None,
                             'platform': 'facebook',
                         }, room=org_room)
                 else:
@@ -251,6 +276,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                         'customer_info': conversation_doc.get('customer_info', {}) if conversation_doc else {},
                         'bot_reply': conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else (conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else None),
                         'bot-reply': conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else (conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else None),
+                        'tags': conversation_doc.get('tags') if conversation_doc else None,
                         'platform': 'facebook',
                     }, account_id=account_id_owner, organization_id=org_fallback)
             except Exception as e:
@@ -809,6 +835,7 @@ def webhook_event():
                         'customer_info': conversation_doc.get('customer_info', {}),
                         'platform': 'facebook',
                         'bot_reply': conversation_doc.get('bot-reply') if conversation_doc and 'bot-reply' in conversation_doc else (conversation_doc.get('bot_reply') if conversation_doc and 'bot_reply' in conversation_doc else None),
+                        'tags': conversation_doc.get('tags') if conversation_doc else None,
                     }, organization_id=integration.get('organizationId'))
                         logger.info(f'Emitted update-conversation to account {account_id_owner} and org {integration.get("organizationId")} via socket')
             except Exception:
@@ -1384,6 +1411,21 @@ def send_conversation_message(conv_id):
                             'conversation_id': conversation_id,
                             'handler': claimed.get('current_handler')
                         }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+
+                        # Also emit update-conversation with tags so UIs update in real-time
+                        try:
+                            refreshed_conv = conversation_model.find_by_oa_and_customer(oa_id, f"facebook:{sender_id}", organization_id=integration.get('organizationId'), account_id=account_id_owner)
+                            if refreshed_conv:
+                                _emit_socket('update-conversation', {
+                                    'conversation_id': conversation_id,
+                                    'conv_id': conv_id,
+                                    'oa_id': oa_id,
+                                    'customer_id': f"facebook:{sender_id}",
+                                    'tags': refreshed_conv.get('tags'),
+                                    'platform': 'facebook',
+                                }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.debug(f"Failed to claim conversation handler: {e}")
             except Exception:
@@ -1446,6 +1488,10 @@ def set_conversation_bot_reply(conv_id):
         updated = conversation_model.set_bot_reply_by_id(conv.get('_id'), enabled_bool, account_id=integration.get('accountId'), organization_id=integration.get('organizationId'))
         # Emit update so other clients (account owner and org members) get realtime state
         try:
+            # Refresh conversation to ensure we get latest tags
+            refreshed_conv = conversation_model.find_by_oa_and_customer(
+                oa_id, customer_id, organization_id=user_org_id, account_id=account_id
+            ) or updated
             conv_id_legacy = f"facebook:{oa_id}:{sender_id}"
             org_fallback = integration.get('organizationId') or conv.get('organizationId')
             _emit_socket('update-conversation', {
@@ -1454,6 +1500,7 @@ def set_conversation_bot_reply(conv_id):
                 'oa_id': oa_id,
                 'customer_id': f"facebook:{sender_id}",
                 'bot_reply': updated.get('bot_reply') if updated and 'bot_reply' in updated else enabled_bool,
+                'tags': refreshed_conv.get('tags') if refreshed_conv else None,
             }, account_id=integration.get('accountId'), organization_id=org_fallback)
         except Exception as e:
             logger.debug(f"Failed to emit bot-reply update: {e}")

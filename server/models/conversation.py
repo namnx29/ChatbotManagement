@@ -201,7 +201,7 @@ class ConversationModel:
         
         # Check if conversation exists first to avoid $setOnInsert vs $inc conflict
         existing = self.collection.find_one(query)
-        
+
         if existing:
             # Document exists - use $set and $inc
             update_op = {
@@ -212,14 +212,17 @@ class ConversationModel:
         else:
             # Document doesn't exist - use $setOnInsert for initial values
             initial_unread = 1 if (increment_unread and direction == 'in') else 0
+            # Default behavior: new conversations default to bot auto-reply ON
             update_op = {
                 '$set': update_doc,
                 '$setOnInsert': {
                     'created_at': now,
                     'unread_count': initial_unread,
+                    'bot_reply': True,
+                    'tags': 'bot-interacting',
                 }
             }
-        
+
         # Upsert conversation with account isolation
         result = self.collection.find_one_and_update(
             query,
@@ -227,7 +230,34 @@ class ConversationModel:
             upsert=True,
             return_document=True
         )
-        
+
+        # Ensure tags are consistent with handler/bot_reply state
+        try:
+            desired_tag = None
+            if result.get('current_handler'):
+                desired_tag = 'staff-interacting'
+            else:
+                # support both snake and hyphen bot flag
+                bot_flag = result.get('bot_reply') if 'bot_reply' in result else result.get('bot-reply')
+                if bot_flag:
+                    desired_tag = 'bot-interacting'
+
+            # Compare and update if needed
+            existing_tag = result.get('tags')
+            if desired_tag != existing_tag:
+                if desired_tag:
+                    self.collection.update_one({'_id': result.get('_id')}, {'$set': {'tags': desired_tag, 'updated_at': now}})
+                else:
+                    self.collection.update_one({'_id': result.get('_id')}, {'$unset': {'tags': ''}, '$set': {'updated_at': now}})
+                # refresh
+                result = self.collection.find_one({'_id': result.get('_id')})
+        except Exception:
+            # Non-fatal: return best-effort serialized result
+            try:
+                result = self.collection.find_one({'_id': result.get('_id')})
+            except Exception:
+                pass
+
         return self._serialize(result)
 
     def find_by_oa_and_customer(self, oa_id, customer_id, account_id=None, organization_id=None):
@@ -361,6 +391,7 @@ class ConversationModel:
                     },
                     'lock_expires_at': expires_at,
                     'updated_at': now,
+                    'tags': 'staff-interacting',
                 }
             },
             return_document=True
@@ -407,6 +438,7 @@ class ConversationModel:
                         'started_at': now,
                     },
                     'updated_at': now,
+                    'tags': 'staff-interacting',
                 }
             },
             return_document=True
@@ -436,6 +468,17 @@ class ConversationModel:
                 },
                 return_document=True
             )
+            # After unlocking, adjust tags: if bot_reply is enabled, set bot-interacting, otherwise remove tags
+            try:
+                if res:
+                    bot_flag = res.get('bot_reply') if 'bot_reply' in res else res.get('bot-reply')
+                    if bot_flag:
+                        self.collection.update_one({'_id': res.get('_id')}, {'$set': {'tags': 'bot-interacting', 'updated_at': datetime.utcnow()}})
+                    else:
+                        self.collection.update_one({'_id': res.get('_id')}, {'$unset': {'tags': ''}, '$set': {'updated_at': datetime.utcnow()}})
+                    res = self.collection.find_one({'_id': res.get('_id')})
+            except Exception:
+                pass
             return self._serialize(res)
         else:
             res = self.collection.find_one_and_update(
@@ -446,6 +489,16 @@ class ConversationModel:
                 },
                 return_document=True
             )
+            try:
+                if res:
+                    bot_flag = res.get('bot_reply') if 'bot_reply' in res else res.get('bot-reply')
+                    if bot_flag:
+                        self.collection.update_one({'_id': res.get('_id')}, {'$set': {'tags': 'bot-interacting', 'updated_at': datetime.utcnow()}})
+                    else:
+                        self.collection.update_one({'_id': res.get('_id')}, {'$unset': {'tags': ''}, '$set': {'updated_at': datetime.utcnow()}})
+                    res = self.collection.find_one({'_id': res.get('_id')})
+            except Exception:
+                pass
             return self._serialize(res)
 
     def expire_locks(self):
@@ -457,6 +510,16 @@ class ConversationModel:
         updated_ids = [r.get('_id') for r in res if r.get('_id')]
         # unset fields for these docs
         self.collection.update_many({'_id': {'$in': updated_ids}}, {'$set': {'updated_at': now}, '$unset': {'current_handler': '', 'lock_expires_at': ''}})
+
+        # After expiring locks, set/remove tags according to bot_reply
+        try:
+            # For docs with bot_reply True -> set bot-interacting
+            self.collection.update_many({'_id': {'$in': updated_ids}, 'bot_reply': True}, {'$set': {'tags': 'bot-interacting', 'updated_at': now}})
+            # For docs without bot_reply -> remove tags
+            self.collection.update_many({'_id': {'$in': updated_ids}, '$or': [{'bot_reply': False}, {'bot_reply': {'$exists': False}}, {'bot-reply': False}]}, {'$unset': {'tags': ''}, '$set': {'updated_at': now}})
+        except Exception:
+            pass
+
         docs = list(self.collection.find({'_id': {'$in': updated_ids}}))
         return [self._serialize(d) for d in docs]
 
@@ -554,6 +617,22 @@ class ConversationModel:
 
             # Update all matching documents so all staff see the change (org/account scoped)
             self.collection.update_many(match, update)
+
+            # Update tags for documents that are not currently handled by staff
+            if bool(enabled):
+                # Set tag to bot-interacting for docs without a handler
+                no_handler_filter = {**match, '$or': [{'current_handler': None}, {'current_handler': {'$exists': False}}]}
+                try:
+                    self.collection.update_many(no_handler_filter, {'$set': {'tags': 'bot-interacting', 'updated_at': now}})
+                except Exception:
+                    pass
+            else:
+                # Disable: remove tag for docs without a handler
+                no_handler_filter = {**match, '$or': [{'current_handler': None}, {'current_handler': {'$exists': False}}]}
+                try:
+                    self.collection.update_many(no_handler_filter, {'$unset': {'tags': ''}, '$set': {'updated_at': now}})
+                except Exception:
+                    pass
 
             # Return the primary document (refreshed)
             refreshed = self.collection.find_one({'_id': primary.get('_id')})

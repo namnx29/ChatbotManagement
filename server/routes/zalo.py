@@ -1957,31 +1957,41 @@ def refresh_expiring_tokens(mongo_client):
     integration_model = IntegrationModel(mongo_client)
     cutoff = datetime.utcnow() + timedelta(seconds=Config.TOKEN_REFRESH_LEAD_SECONDS)
     expiring = integration_model.integrations_needing_refresh(cutoff)
-    logger.info(f"Found {len(expiring)} integrations needing refresh")
+    
     for item in expiring:
-        # Use refresh_token to obtain new access token
         try:
             refresh_token = item.get('refresh_token')
             if not refresh_token:
-                logger.info(f"No refresh token for integration {item.get('_id')}; skipping")
                 continue
-            token_url = f"{Config.ZALO_API_BASE}/v4/refresh_token"
-            payload = {
-                'app_id': Config.ZALO_APP_ID,
-                'app_secret': Config.ZALO_APP_SECRET,
-                'refresh_token': refresh_token,
+
+            token_url = "https://oauth.zalo.me/v4/oa/access_token"
+            
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'secret_key': Config.ZALO_APP_SECRET
             }
-            try:
-                resp = requests.post(token_url, json=payload, timeout=10)
-                data = resp.json()
-                if resp.status_code == 200 and 'access_token' in data:
-                    integration_model.update_tokens(item.get('_id'), access_token=data.get('access_token'), refresh_token=data.get('refresh_token'), expires_in=data.get('expires_in'))
-                    logger.info(f"Refreshed token for integration {item.get('_id')}")
-                else:
-                    raise Exception('unexpected response')
-            except Exception as e:
-                # mock fallback
-                logger.info(f"Token refresh failed or skipped for {item.get('_id')}: {e}; using mock refresh")
-                integration_model.update_tokens(item.get('_id'), access_token=f"mock_access_refresh_{item.get('_id')}", expires_in=60 * 60 * 24 * 30)
+            
+            payload = {
+                'refresh_token': refresh_token,
+                'app_id': Config.ZALO_APP_ID,
+                'grant_type': 'refresh_token'
+            }
+
+            # Gửi request (Sử dụng data= cho x-www-form-urlencoded)
+            resp = requests.post(token_url, data=payload, headers=headers, timeout=15)
+            data = resp.json()
+
+            if resp.status_code == 200 and 'access_token' in data:
+                # LƯU Ý: Phải cập nhật cả refresh_token mới vì nó chỉ dùng được 1 lần
+                integration_model.update_tokens(
+                    item.get('_id'), 
+                    access_token=data.get('access_token'), 
+                    refresh_token=data.get('refresh_token'), 
+                    expires_in=int(data.get('expires_in'))
+                )
+                logger.info(f"Successfully refreshed Zalo token for OA: {item.get('oa_id')}")
+            else:
+                logger.error(f"Zalo V4 Refresh Error: {data}")
+                
         except Exception as e:
-            logger.error(f"Failed to refresh token for {item.get('_id')}: {e}")
+            logger.error(f"Critical error in refresh scheduler: {e}")

@@ -48,10 +48,9 @@ export default function FilterModal({ open, onClose }) {
 	];
 
 	const tags = [
-		{ value: 'completed', label: 'Chốt đơn', color: '#52c41a' },
 		{ value: 'bot-failed', label: 'Bot không trả lời được', color: '#ff4d4f' },
-		{ value: 'no-response', label: 'Khách không phản hồi', color: '#8c8c8c' },
-		{ value: 'interacting', label: 'Đang tương tác', color: '#fa8c16' },
+		{ value: 'staff-interacting', label: 'Nhân viên khác đang tương tác', color: '#6c3fb5' },
+		{ value: 'bot-interacting', label: 'Bot đang tương tác', color: '#fa8c16' },
 	];
 
 	const toggleSection = (section) => {
@@ -69,7 +68,6 @@ export default function FilterModal({ open, onClose }) {
 	};
 
 	const handleApply = () => {
-		console.log('Selected filters:', selectedFilters);
 		onClose();
 	};
 

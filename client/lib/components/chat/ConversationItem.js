@@ -37,6 +37,12 @@ const tagColors = {
 	'staff-interacting': '#6c3fb5',
 };
 
+const tagLabels = {
+    'bot-failed': 'Bot gặp lỗi',
+    'bot-interacting': 'Bot đang trả lời',
+    'staff-interacting': 'Nhân viên đang hỗ trợ',
+};
+
 function parseToDate(s) {
 	if (!s) return null;
 	if (s instanceof Date) return s;
@@ -169,7 +175,10 @@ export default function ConversationItem({ conversation, isSelected, onClick, is
 								{conversation.name}
 							</span>
 							{conversation.tags && (
-								<TagFilled style={{ color: tagColors[conversation.tags] }} />
+								<TagFilled
+									title={tagLabels[conversation.tags]}
+									style={{ color: tagColors[conversation.tags] }}
+								/>
 							)}
 						</div>
 						<Dropdown menu={{ items: menuItems }} trigger={['click']}>

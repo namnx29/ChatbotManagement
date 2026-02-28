@@ -53,6 +53,12 @@ const tagColors = {
 	'staff-interacting': '#6c3fb5',
 };
 
+const tagLabels = {
+	'bot-failed': 'Bot gặp lỗi',
+	'bot-interacting': 'Bot đang trả lời',
+	'staff-interacting': 'Nhân viên đang hỗ trợ',
+};
+
 const getDateLabel = (date) => {
 	if (!date) return "";
 
@@ -513,7 +519,10 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 								</>
 							)}
 							{conversation.tags && (
-								<TagFilled style={{ color: tagColors[conversation.tags] || tagColors['interacting'] }} />
+								<TagFilled
+									title={tagLabels[conversation.tags]}
+									style={{ color: tagColors[conversation.tags] }}
+								/>
 							)}
 							{conversation.secondaryTag && (
 								<div
@@ -974,7 +983,10 @@ export default function ChatBox({ conversation, onSendMessage, onLoadMore, onScr
 											</>
 										)}
 										{conversation.tags && (
-											<TagFilled style={{ color: tagColors[conversation.tags] || tagColors['interacting'] }} />
+											<TagFilled
+												title={tagLabels[conversation.tags]}
+												style={{ color: tagColors[conversation.tags] }}
+											/>
 										)}
 										{conversation.secondaryTag && (
 											<div

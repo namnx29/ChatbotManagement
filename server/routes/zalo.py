@@ -2005,8 +2005,11 @@ def send_conversation_message(conv_id):
 def refresh_expiring_tokens(mongo_client):
     integration_model = IntegrationModel(mongo_client)
     cutoff = datetime.utcnow() + timedelta(seconds=Config.TOKEN_REFRESH_LEAD_SECONDS)
-    expiring = integration_model.integrations_needing_refresh(cutoff)
-    
+    expiring = integration_model.collection.find({
+        "platform": "zalo",
+        "expires_at": {"$lt": cutoff},
+        "is_active": True
+    })
     for item in expiring:
         try:
             refresh_token = item.get('refresh_token')

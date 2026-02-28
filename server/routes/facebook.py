@@ -1605,7 +1605,11 @@ def _send_message_to_facebook(page_access_token, recipient_id, message_text=None
 def refresh_expiring_tokens(mongo_client):
     integration_model = IntegrationModel(mongo_client)
     cutoff = datetime.utcnow() + timedelta(seconds=Config.TOKEN_REFRESH_LEAD_SECONDS)
-    expiring = integration_model.integrations_needing_refresh(cutoff)
+    expiring = integration_model.collection.find({
+        "platform": "facebook",
+        "expires_at": {"$lt": cutoff},
+        "is_active": True
+    })
     logger.info(f"Found {len(expiring)} facebook integrations needing refresh")
     for item in expiring:
         try:

@@ -8,8 +8,7 @@ import {
   Tag,
   Space,
   Dropdown,
-  Modal,
-  message,
+  App,
 } from "antd";
 import {
   SearchOutlined,
@@ -26,7 +25,32 @@ import CreateChatbotModal from "@/lib/components/popup/CreateChatbot";
 import { listChatbots, deleteChatbot, getAvatarUrl } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
+const platformIcons = {
+  facebook: (
+    <img
+      src="/Messenger.png"
+      alt="Facebook"
+      style={{ width: '16px', height: '16px', objectFit: 'contain' }}
+    />
+  ),
+  instagram: (
+    <img
+      src="/Instagram.png"
+      alt="Instagram"
+      style={{ width: '16px', height: '16px', objectFit: 'contain' }}
+    />
+  ),
+  zalo: (
+    <img
+      src="/Zalo.png"
+      alt="Zalo"
+      style={{ width: '16px', height: '16px', objectFit: 'contain' }}
+    />
+  )
+};
+
 export default function ChatbotPage() {
+  const { message, modal } = App.useApp();
   const router = useRouter();
   const [viewMode, setViewMode] = useState("grid");
   const [selectedFilter, setSelectedFilter] = useState("newest");
@@ -46,6 +70,7 @@ export default function ChatbotPage() {
             : null;
         if (!accountId) return;
         const res = await listChatbots(accountId);
+        console.log(res);
         if (res && res.data) {
           // Map avatar path to full URL if needed
           const bots = res.data.map((b) => ({
@@ -55,6 +80,7 @@ export default function ChatbotPage() {
               ? new Date(b.updated_at).toLocaleString()
               : "",
             status: b.purpose || "",
+            platforms: b.platforms || [],
           }));
           setAllBots(bots);
           setChatbots(bots);
@@ -94,7 +120,7 @@ export default function ChatbotPage() {
   }, [searchText, filterPurpose, selectedFilter, allBots]);
 
   const handleDelete = async (botId) => {
-    Modal.confirm({
+    modal.confirm({
       title: "Xác nhận xóa chatbot",
       content:
         "Bạn có chắc muốn xóa chatbot này? Hành động này không thể hoàn tác.",
@@ -187,18 +213,23 @@ export default function ChatbotPage() {
               />
             </Space>
           </div>
-          <Tag
-            color="purple"
-            style={{
-              marginTop: "8px",
-              borderRadius: "4px",
-              fontSize: "12px",
-            }}
-          >
-            {bot.status === "message"
-              ? "Trả lời tin nhắn"
-              : "Trả lời bình luận"}
-          </Tag>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: '8px'
+          }}>
+            <Tag color="purple" style={{ borderRadius: "4px", fontSize: "12px", margin: 0 }}>
+              {bot.status === "message" ? "Trả lời tin nhắn" : "Trả lời bình luận"}
+            </Tag>
+
+            {/* Platform Icons */}
+            <Space size={12}>
+              {bot.platforms?.map(p => (
+                <span key={p} style={{ display: 'flex' }}>{platformIcons[p]}</span>
+              ))}
+            </Space>
+          </div>
           <div style={{ marginTop: "12px", fontSize: "13px", color: "#666" }}>
             <div>Ngày cập nhật</div>
             <div style={{ marginTop: "4px" }}>{bot.lastUpdated}</div>
@@ -240,18 +271,17 @@ export default function ChatbotPage() {
             <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600" }}>
               {bot.name}
             </h3>
-            <Tag
-              color="purple"
-              style={{
-                marginTop: "4px",
-                borderRadius: "4px",
-                fontSize: "12px",
-              }}
-            >
-              {bot.status === "message"
-                ? "Trả lời tin nhắn"
-                : "Trả lời bình luận"}
-            </Tag>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+              <Tag color="purple" style={{ borderRadius: "4px", fontSize: "12px", margin: 0 }}>
+                {bot.status === "message" ? "Trả lời tin nhắn" : "Trả lời bình luận"}
+              </Tag>
+
+              <Space size={4}>
+                {bot.platforms?.map(p => (
+                  <span key={p} style={{ display: 'flex' }}>{platformIcons[p]}</span>
+                ))}
+              </Space>
+            </div>
           </div>
         </div>
         <div

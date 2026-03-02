@@ -55,7 +55,16 @@ def init_chatbot_routes(mongo_client):
             if not account_id:
                 return jsonify({'success': False, 'message': 'Account ID is required'}), 400
 
+            from models.integration import IntegrationModel
+            integration_model = IntegrationModel(mongo_client)
+
             bots = chatbot_model.list_chatbots_by_account(account_id)
+            for bot in bots:
+                integrations = integration_model.find_by_account(account_id, chatbot_id=str(bot.get('id')))
+                
+                platform_list = list({item.get('platform') for item in integrations if item.get('platform')})
+                
+                bot['platforms'] = platform_list
             return jsonify({'success': True, 'data': bots}), 200
         except Exception as e:
             logger.error(f"List chatbots error: {str(e)}")

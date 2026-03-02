@@ -52,6 +52,7 @@ function DashboardLayoutContent({ children }) {
   const [userName, setUserName] = useState("");
   const [userAvatar, setUserAvatar] = useState(null);
   const [userRole, setUserRole] = useState("admin");
+  const [sidebarStats, setSidebarStats] = useState({ totalMessages: 0, botReplies: 0 });
   const siderWidth = 240;
   const collapsedWidth = 50;
 
@@ -127,6 +128,48 @@ function DashboardLayoutContent({ children }) {
     window.addEventListener("nameUpdated", handleNameUpdate);
     return () =>
       window.removeEventListener("nameUpdated", handleNameUpdate);
+  }, []);
+
+  // Listen for real-time message stats updates from messages page
+  useEffect(() => {
+    const handleStatsUpdate = (event) => {
+      const stats = event.detail?.stats;
+      if (stats) {
+        setSidebarStats(stats);
+      }
+    };
+
+    window.addEventListener("messageStatsUpdated", handleStatsUpdate);
+    return () =>
+      window.removeEventListener("messageStatsUpdated", handleStatsUpdate);
+  }, []);
+
+  // Fetch initial message stats when component mounts
+  useEffect(() => {
+    const fetchStats = async () => {
+      const accountId = localStorage.getItem("accountId");
+      if (!accountId) return;
+
+      try {
+        const response = await fetch("/api/integrations/conversations/all", {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Account-Id": accountId,
+          },
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result.stats) {
+            setSidebarStats(result.stats);
+          }
+        }
+      } catch (error) {
+        console.log("Failed to fetch message stats for sidebar");
+      }
+    };
+
+    fetchStats();
   }, []);
 
   useEffect(() => {
@@ -543,11 +586,11 @@ function DashboardLayoutContent({ children }) {
                   <div
                     style={{ fontSize: 12, marginBottom: 6, color: "white" }}
                   >
-                    Cuộc hội thoại: 0 / 2,000
+                    Tin nhắn: {sidebarStats.botReplies.toLocaleString()} / 2,000
                   </div>
                   <Progress
-                    percent={0}
-                    strokeColor="#737373"
+                    percent={Math.min((sidebarStats.totalMessages / 2000) * 100, 100)}
+                    strokeColor="#6c3fb5"
                     railColor="#737373"
                     showInfo={false}
                     size="small"

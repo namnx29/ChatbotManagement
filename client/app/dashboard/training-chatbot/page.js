@@ -70,7 +70,6 @@ export default function ChatbotPage() {
             : null;
         if (!accountId) return;
         const res = await listChatbots(accountId);
-        console.log(res);
         if (res && res.data) {
           // Map avatar path to full URL if needed
           const bots = res.data.map((b) => ({

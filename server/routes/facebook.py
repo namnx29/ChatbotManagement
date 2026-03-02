@@ -189,6 +189,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                 direction='out',
                 text=answer,
                 metadata={'auto_reply': True, 'source': 'external_api', 'api_response': send_resp},
+                bot_reply=True,
                 tags='bot-interacting',
                 is_read=True,
                 conversation_id=conversation_id,
@@ -229,6 +230,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                 'conversation_id': conversation_id,
                 'sent_at': datetime.utcnow().isoformat() + 'Z',
                 'direction': 'out',
+                'bot_reply': sent_doc.get('bot_reply') if sent_doc else False,
             }
             try:
                 if socketio:
@@ -797,6 +799,7 @@ def webhook_event():
                 'sender_id': customer_platform_id,
                 'message': message_text,
                 'message_doc': incoming_doc,
+                'bot_reply': incoming_doc.get('bot_reply') if incoming_doc else False,
                 'conv_id': conv_id,
                 'conversation_id': conversation_id,  # New field (already string)
                 'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
@@ -1366,6 +1369,7 @@ def send_conversation_message(conv_id):
                 'sender_id': sender_id,
                 'message': text if text else ("Tệp đính kèm" if image else None),
                 'message_doc': sent_doc,
+                'bot_reply': sent_doc.get('bot_reply') if sent_doc else False,
                 'conv_id': f"{platform}:{oa_id}:{sender_id}",
                 'conversation_id': conversation_id,  # Already string
                 'direction': 'out',

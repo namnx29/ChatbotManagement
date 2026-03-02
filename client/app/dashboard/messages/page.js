@@ -40,7 +40,9 @@ const SOCKET_CONFIG = {
 };
 const MESSAGE_TIMEOUT = 5000;
 const MESSAGE_LIMIT = 10;
-const MAX_CONVERSATIONS = 2000;
+// TODO: this limit currently served as maximum conversations allowed;
+// for message stats we reuse the same threshold until a dedicated limit exists
+const MAX_MESSAGES = 2000;
 
 // Filter options configuration
 const FILTER_OPTIONS = [
@@ -61,6 +63,7 @@ export default function ChatManagementPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({ totalMessages: 0, botReplies: 0 });
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [isPending, startTransition] = useTransition();
@@ -78,6 +81,7 @@ export default function ChatManagementPage() {
   // Refs
   const socketRef = useRef(null);
   const pendingTimeoutsRef = useRef(new Map());
+  const countedMessageIdsRef = useRef(new Set()); // Track message IDs already counted to prevent duplicates from socket rooms
 
   // Memoized values
   const accountId = useMemo(() =>
@@ -237,6 +241,31 @@ export default function ChatManagementPage() {
       const newMsgClient = payload.message_doc ? mapMessageDocToClient(payload.message_doc) : null;
 
       if (!newMsgClient) return;
+      
+      // Check if we've already counted this message to avoid double-counting from multiple socket rooms
+      const messageId = payload.message_doc?._id;
+      if (messageId && countedMessageIdsRef.current.has(messageId)) {
+        // Already counted this message, skip stats update
+      } else if (messageId) {
+        // Mark this message as counted
+        countedMessageIdsRef.current.add(messageId);
+        
+        // Keep the set bounded to prevent memory issues (keep last 500 messages)
+        if (countedMessageIdsRef.current.size > 500) {
+          const arr = Array.from(countedMessageIdsRef.current);
+          countedMessageIdsRef.current = new Set(arr.slice(-500));
+        }
+        
+        // Update stats in real-time: increment total messages and bot replies if applicable
+        setStats(prev => {
+          const updated = { ...prev };
+          updated.totalMessages = (updated.totalMessages || 0) + 1;
+          if (payload.bot_reply) {
+            updated.botReplies = (updated.botReplies || 0) + 1;
+          }
+          return updated;
+        });
+      }
 
       // Extract profile info
       const profileInfo = {
@@ -508,6 +537,9 @@ export default function ChatManagementPage() {
       try {
         setLoading(true);
         const res = await listAllConversations(accountId);
+        if (res?.stats) {
+          setStats(res.stats);
+        }
         const allConversations = (res?.data || []).map(c => ({
           id: c.id,
           name: c?.name || 'Khách hàng',
@@ -553,6 +585,13 @@ export default function ChatManagementPage() {
       mounted = false;
     };
   }, [accountId]);
+
+  // Broadcast stats changes to layout sidebar
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('messageStatsUpdated', {
+      detail: { stats }
+    }));
+  }, [stats]);
 
   // Handle chat selection
   const handleSelectChat = useCallback(async (conversation) => {
@@ -939,9 +978,9 @@ export default function ChatManagementPage() {
                 marginBottom: '4px',
               }}
             >
-              <span style={{ color: '#666' }}>Cuộc hội thoại</span>
+              <span style={{ color: '#666' }}>Tin nhắn</span>
               <span style={{ fontWeight: '500' }}>
-                {conversations.length} / {MAX_CONVERSATIONS.toLocaleString()}
+                {stats.botReplies.toLocaleString()} / {MAX_MESSAGES.toLocaleString()}
               </span>
             </div>
             <div
@@ -954,7 +993,7 @@ export default function ChatManagementPage() {
             >
               <div
                 style={{
-                  width: `${Math.min((conversations.length / MAX_CONVERSATIONS) * 100, 100)}%`,
+                  width: `${Math.min((stats.totalMessages / MAX_MESSAGES) * 100, 100)}%`,
                   height: '100%',
                   background: '#6c3fb5',
                   transition: 'width 0.3s ease',

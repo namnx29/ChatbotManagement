@@ -28,6 +28,12 @@ class MessageModel:
         self.collection.create_index([('organizationId', 1), ('conversation_id', 1), ('created_at', -1)])
         self.collection.create_index([('organizationId', 1), ('platform', 1), ('oa_id', 1), ('created_at', -1)])
         self.collection.create_index([('organizationId', 1), ('created_at', -1)])
+        # index to quickly count/filter bot replies
+        try:
+            self.collection.create_index([('organizationId', 1), ('bot_reply', 1)])
+        except Exception:
+            # best effort; not critical if it fails
+            pass
 
     def _serialize(self, doc):
         """Return a fully JSON-serializable representation of a message document.
@@ -73,7 +79,7 @@ class MessageModel:
 
         return out
 
-    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None, organization_id=None, tags=None):
+    def add_message(self, platform, oa_id, sender_id, direction, text=None, metadata=None, sender_profile=None, is_read=False, conversation_id=None, account_id=None, organization_id=None, bot_reply=False, tags=None):
         """
         Add a message. 
         - conversation_id: Optional ObjectId string of conversation. If provided, this is the new way.
@@ -90,6 +96,7 @@ class MessageModel:
             'metadata': metadata or {},
             'sender_profile': sender_profile or {},
             'is_read': bool(is_read),
+            'bot_reply': bool(bot_reply),
             'created_at': now,
             'updated_at': now,
         }
@@ -162,7 +169,7 @@ class MessageModel:
         doc = self.collection.find_one(q, sort=[('created_at', -1)])
         return self._serialize(doc) if doc else None
 
-    def get_messages(self, platform, oa_id, sender_id, limit=50, skip=0, conversation_id=None, account_id=None):
+    def get_messages(self, platform, oa_id, sender_id, limit=50, skip=0, conversation_id=None, account_id=None, bot_reply=None):
         """
         Get messages. If conversation_id is provided, use it; otherwise use legacy sender_id.
         """
@@ -196,6 +203,9 @@ class MessageModel:
 
         if account_id:
             q['accountId'] = account_id
+        # allow caller to filter only bot replies or only non-bot
+        if bot_reply is not None:
+            q['bot_reply'] = bool(bot_reply)
 
         cursor = self.collection.find(q).sort('created_at', -1).skip(skip).limit(limit)
         docs = [self._serialize(d) for d in list(cursor)]

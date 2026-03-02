@@ -379,8 +379,26 @@ def get_all_conversations():
         # Sort by time descending (most recent first)
         enriched_conversations.sort(key=lambda x: x.get('time') or '', reverse=True)
         
+        # Compute message statistics for the same scope (account or organization)
+        stats = {'totalMessages': 0, 'botReplies': 0}
+        try:
+            from models.message import MessageModel
+            message_model = MessageModel(current_app.mongo_client)
+            query = {}
+            if user_org_id:
+                query['organizationId'] = user_org_id
+            else:
+                query['accountId'] = account_id
+            stats['totalMessages'] = message_model.collection.count_documents(query)
+            # count bot replies only
+            query_bot = query.copy()
+            query_bot['bot_reply'] = True
+            stats['botReplies'] = message_model.collection.count_documents(query_bot)
+        except Exception as e:
+            logger.warning(f"Failed to compute message stats: {e}")
+        
         logger.info(f"Returning {len(enriched_conversations)} conversations for account {account_id}")
-        return jsonify({'success': True, 'data': enriched_conversations}), 200
+        return jsonify({'success': True, 'data': enriched_conversations, 'stats': stats}), 200
         
     except Exception as e:
         logger.error(f"Error getting all conversations: {e}", exc_info=True)

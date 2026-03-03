@@ -1,6 +1,6 @@
 "use client";
 
-import { Layout, Menu, Button, Select, Avatar, Modal, Input, message } from "antd";
+import { Layout, Menu, Button, Select, Avatar } from "antd";
 import {
   ArrowLeftOutlined,
   AppstoreFilled,
@@ -229,7 +229,7 @@ export default function TrainingLayout({ children, params }) {
             background: "white",
             borderRight: "1px solid #f0f0f0",
             overflow: "auto",
-            height: "calc(100vh - 100px)",
+            height: "calc(100vh - 50px)",
           }}
         >
           <div
@@ -239,43 +239,56 @@ export default function TrainingLayout({ children, params }) {
               gap: "8px",
               padding: "12px",
               borderBottom: "1px solid #f0f0f0",
+              overflow: "hidden",
             }}
           >
             <Button
               type="text"
               icon={<ArrowLeftOutlined />}
               onClick={backToBotList}
+              style={{ flexShrink: 0 }}
             />
-            {/* Bot selector and display */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input
-                  id="bot-avatar-input"
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                />
-                <Select
-                  value={currentBot ? currentBot.id : undefined}
-                  onChange={handleSelectBot}
-                  loading={loadingBots}
-                  optionLabelProp="label"
-                >
-                  {bots.map((b) => (
-                    <Select.Option key={b.id} value={b.id} label={
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Avatar src={getAvatarUrl(b.avatar_url)} size={30} />
-                        <span>{b.name}</span>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+              <Select
+                value={currentBot ? currentBot.id : undefined}
+                onChange={handleSelectBot}
+                loading={loadingBots}
+                optionLabelProp="label"
+                style={{ width: '100%', maxWidth: '250px' }}
+              >
+                {bots.map((b) => (
+                  <Select.Option
+                    key={b.id}
+                    value={b.id}
+                    label={
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                        <Avatar src={getAvatarUrl(b.avatar_url)} size={30} style={{ flexShrink: 0 }} />
+                        <span style={{
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {b.name}
+                        </span>
                       </div>
-                    }>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Avatar src={getAvatarUrl(b.avatar_url)} size={30} />
-                        <span style={{ fontWeight: b.id === id ? 600 : 400 }}>{b.name}</span>
-                      </div>
-                    </Select.Option>
-                  ))}
-                </Select>
-              </div>
+                    }
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Avatar src={getAvatarUrl(b.avatar_url)} size={30} style={{ flexShrink: 0 }} />
+                      <span style={{
+                        fontWeight: b.id === id ? 600 : 400,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        flex: 1
+                      }}>
+                        {b.name}
+                      </span>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select>
             </div>
           </div>
           <Menu

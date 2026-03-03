@@ -665,7 +665,7 @@ function DashboardLayoutContent({ children }) {
                 background: "white",
               }}
             >
-              <TrialBanner />
+              {/* <TrialBanner /> */}
               {children}
             </Content>
           </Layout>

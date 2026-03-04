@@ -807,12 +807,46 @@ def webhook_event():
             binding = get_staff_binding(str(customer_platform_id))
             text_raw = (message or '').strip()
 
-            # Accept command: "/accept <conv_id>" or "/accept" to take oldest pending
+            # Accept command: "/accept<number>" (e.g. /accept1, /accept2), "/accept <conv_id>", or "/accept" to take first pending
             if text_raw.lower().startswith('/accept'):
-                parts_cmd = text_raw.split(maxsplit=1)
-                target_conv_id = parts_cmd[1].strip() if len(parts_cmd) > 1 else None
-                if not target_conv_id:
+                # Parse the command: could be /accept, /accept1, /accept2, or /accept <conv_id>
+                cmd_match = text_raw[7:].strip()  # Extract everything after "/accept"
+                target_conv_id = None
+                
+                # Check if it's a numeric format: /accept1, /accept2, etc.
+                if cmd_match and cmd_match[0].isdigit():
+                    try:
+                        item_index = int(cmd_match)
+                        # Fetch pending list from Redis
+                        from utils.support_workflow import get_key, _key_pending
+                        import json
+                        pending_key = _key_pending(org_id)
+                        raw_pending = get_key(pending_key) if org_id else None
+                        pending_list = []
+                        if raw_pending:
+                            try:
+                                pending_list = json.loads(raw_pending) if isinstance(raw_pending, str) else raw_pending
+                                if not isinstance(pending_list, list):
+                                    pending_list = []
+                            except Exception:
+                                pending_list = []
+                        
+                        if item_index < 1 or item_index > len(pending_list):
+                            _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text=f"Yêu cầu số {item_index} không tồn tại. Có {len(pending_list)} yêu cầu đang chờ.")
+                            return jsonify({'success': True}), 200
+                        
+                        target_conv_id = pending_list[item_index - 1]  # Convert to 0-based index
+                        logger.info(f"Staff selected item {item_index} from pending: {target_conv_id}")
+                    except ValueError:
+                        # Not a valid number, treat as conv_id
+                        target_conv_id = cmd_match.strip() if cmd_match else None
+                elif cmd_match:
+                    # It's either a conv_id or explicitly provided
+                    target_conv_id = cmd_match.strip()
+                else:
+                    # Just "/accept", take the first from pending
                     target_conv_id = pop_pending_support(org_id) if org_id else None
+                
                 if not target_conv_id:
                     _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không có yêu cầu hỗ trợ nào đang chờ.")
                     return jsonify({'success': True}), 200
@@ -937,6 +971,14 @@ def webhook_event():
                 logger.debug(f"Staff {customer_platform_id} bound to conv {target_conv_id}, busy={org_id and staff_account_id}")
                 if org_id and staff_account_id:
                     mark_staff_busy(org_id, staff_account_id, str(target_conv_id))
+                
+                # Remove the accepted conversation from the pending list
+                try:
+                    from utils.support_workflow import remove_pending_support
+                    remove_pending_support(org_id, str(target_conv_id))
+                    logger.info(f"Removed accepted conversation {target_conv_id} from pending list")
+                except Exception as e:
+                    logger.debug(f"Failed to remove from pending list: {e}")
 
                 # Send recent history summary (10-20 messages) + "Đã kết nối"
                 try:
@@ -948,14 +990,32 @@ def webhook_event():
                     else:
                         recent = msg_model.get_messages(target_platform, target_oa_id, target_sender_id, limit=20, skip=0, conversation_id=conv_id_db, account_id=None)
                     lines = []
-                    for m in recent[-20:]:
-                        who = 'Bot' if (m.get('bot_reply')) else ('Khách' if m.get('direction') == 'in' else 'OA')
+
+                    for m in recent[-10:]:  # chỉ lấy 10 tin cuối thôi
+                        if m.get('bot_reply'):
+                            who = "🤖 Bot"
+                        elif m.get('direction') == 'in':
+                            who = "🧑 Khách"
+                        else:
+                            who = "👩‍💼 Nhân viên"
+
                         txt = (m.get('text') or '').strip()
-                        if txt:
-                            lines.append(f"[{who}]: \"{txt}\"")
-                    history_text = " ".join(lines)[-2800:] if lines else "(Không có lịch sử gần đây)"
-                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text=f"Lịch sử gần đây: {history_text}")
-                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Đã kết nối")
+                        if not txt:
+                            continue
+
+                        lines.append(f"{who}:\n\"{txt}\"")
+
+                    history_text = "\n\n".join(lines) if lines else "(Không có lịch sử gần đây)"
+                    _send_message_to_zalo(
+                        integration.get('access_token'),
+                        customer_platform_id,
+                        message_text="Đã kết nối nhân viên."
+                    )
+                    _send_message_to_zalo(
+                        integration.get('access_token'),
+                        customer_platform_id,
+                        message_text=f"📌 LỊCH SỬ GẦN ĐÂY\n\n{history_text}"
+                    )
                 except Exception:
                     _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Đã kết nối")
 
@@ -1014,6 +1074,14 @@ def webhook_event():
                         clear_staff_busy(org_id, staff_account_id)
                 except Exception:
                     pass
+                # Remove the handover conversation from the pending list
+                try:
+                    from utils.support_workflow import remove_pending_support
+                    if binding and binding.get('conv_id'):
+                        remove_pending_support(org_id, binding.get('conv_id'))
+                        logger.info(f"Removed handover conversation {binding.get('conv_id')} from pending list")
+                except Exception as e:
+                    logger.debug(f"Failed to remove from pending list: {e}")
                 _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Đã chuyển lại cho chatbot.")
                 
                 # Send remaining pending requests to staff after handover

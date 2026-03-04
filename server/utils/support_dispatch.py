@@ -3,13 +3,84 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_name=None, content=None, platform=None, socketio=None):
-    """Best-effort dispatch to available staff via Zalo message + optional socket event.
+def _build_pending_message(mongo_client, conv_id, index):
+    """Build a formatted message for a single pending request with platform, customer name, and last message.
+    Returns a formatted string or None if conversation not found.
+    """
+    try:
+        from models.conversation import ConversationModel
+        conv_model = ConversationModel(mongo_client)
+        
+        # Parse conv_id format: "platform:oa_id:customer_id"
+        parts = str(conv_id).split(':')
+        if len(parts) < 3:
+            return None
+        platform = parts[0].strip().lower()
+        
+        # Try to find the conversation by oa_id and customer_id
+        oa_id = parts[1]
+        customer_id_full = ':'.join(parts[2:])  # rejoin in case customer_id also has ':'
+        customer_id = f"{platform}:{customer_id_full}"
+        
+        conv = conv_model.find_by_oa_and_customer(oa_id, customer_id)
+        if not conv:
+            return None
+        
+        # Extract relevant info
+        customer_name = (conv.get('customer_info') or {}).get('name') or 'Khách hàng'
+        last_message = conv.get('last_message_text') or None
+        
+        # If last_message_text is empty, try to fetch the latest message from messages collection
+        if not last_message:
+            try:
+                from models.message import MessageModel
+                msg_model = MessageModel(mongo_client)
+                # Get the latest CUSTOMER message (direction='in') from the conversation
+                # Get multiple messages and filter for customer messages
+                recent_msgs = msg_model.get_messages(
+                    platform, oa_id, customer_id_full, limit=10, skip=0,
+                    conversation_id=conv.get('_id'), account_id=None
+                )
+                if recent_msgs and len(recent_msgs) > 0:
+                    # Find the latest customer message (direction='in')
+                    for msg in recent_msgs:
+                        if msg.get('direction') == 'in':  # Only customer messages
+                            last_message = msg.get('text') or 'Không có tin nhắn'
+                            break
+                    # If no customer message found, fall back to any message
+                    if not last_message:
+                        last_message = recent_msgs[0].get('text') or 'Không có tin nhắn'
+            except Exception:
+                pass
+        
+        last_message = (last_message or 'Không có tin nhắn')[:150]
+        
+        # Map platform code to display name
+        platform_display = {
+            'zalo': 'Zalo',
+            'facebook': 'Facebook',
+            'instagram': 'Instagram',
+            'widget': 'Website'
+        }.get(platform, platform.capitalize())
+        
+        # Build formatted message
+        title = "🔔 KHÁCH HÀNG CẦN HỖ TRỢ"
+        name_line = f"Khách hàng: {customer_name}"
+        content_line = f"Nội dung: \"{last_message}\""
+        platform_line = f"Nền tảng: {platform_display}"
+        accept_line = f"Gõ: /accept{index}"
+        
+        return "\n".join([title, "", name_line, content_line, platform_line, "", accept_line])
+    except Exception as e:
+        logger.debug(f"Failed to build pending message for {conv_id}: {e}")
+        return None
 
-    This implements TEST.md "Dispatching" in a testable way:
-    - scans staff users in the organization
-    - skips staff that are marked busy in Redis
-    - sends a Zalo message instructing `/accept <conv_id>`
+
+def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_name=None, content=None, platform=None, socketio=None):
+    """Dispatch to available staff with pending list support.
+    
+    Fetches all pending requests and sends formatted messages with platform, customer name,
+    and last message, allowing staff to choose via /accept<number>.
     """
     if not mongo_client or not organization_id or not conv_id:
         return {'success': False, 'sent': 0, 'skipped_busy': 0, 'skipped_no_zalo': 0, 'skipped_no_staff': 0}
@@ -17,8 +88,9 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
     try:
         from models.user import UserModel
         from models.integration import IntegrationModel
-        from utils.support_workflow import is_staff_busy
+        from utils.support_workflow import is_staff_busy, get_key, _key_pending
         from routes.zalo import _send_message_to_zalo
+        import json
 
         user_model = UserModel(mongo_client)
         integration_model = IntegrationModel(mongo_client)
@@ -32,19 +104,32 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
         if not staff_users:
             return {'success': True, 'sent': 0, 'skipped_busy': 0, 'skipped_no_zalo': 0, 'skipped_no_staff': 1}
 
+        # Fetch all pending requests from Redis
+        pending_key = _key_pending(organization_id)
+        raw_pending = get_key(pending_key)
+        pending_list = []
+        if raw_pending:
+            try:
+                pending_list = json.loads(raw_pending) if isinstance(raw_pending, str) else raw_pending
+                if not isinstance(pending_list, list):
+                    pending_list = []
+            except Exception:
+                pending_list = []
+        
+        # Deduplicate pending list while preserving order
+        seen = set()
+        deduped_list = []
+        for item in pending_list:
+            item_str = str(item)
+            if item_str not in seen:
+                seen.add(item_str)
+                deduped_list.append(item)
+        pending_list = deduped_list[:10]  # Limit to first 10 items
+        pending_count = len(pending_list)
+
         sent = 0
         skipped_busy = 0
         skipped_no_zalo = 0
-
-        title = "🔔 KHÁCH HÀNG CẦN HỖ TRỢ"
-        name_line = f"Khách hàng: {customer_name or 'Khách hàng'}"
-        content_line = f"Nội dung: \"{(content or '').strip()[:200]}\""
-        platform_line = f"Nền tảng: {platform or 'unknown'}"
-        # Staff can just type /accept to take the oldest pending.
-        # We still include conv_id as reference for debugging/traceability.
-        accept_line = "Gõ: /accept"
-        # ref_line = f"Mã: {conv_id}"
-        text = "\n".join([title, "", name_line, content_line, platform_line, "", accept_line])
 
         for su in staff_users:
             staff_account_id = su.get('accountId')
@@ -58,13 +143,18 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
                 continue
 
             try:
-                # If no access_token, _send_message_to_zalo will mock-send when token is missing/mock
-                _send_message_to_zalo(access_token, str(staff_zalo_user_id), message_text=text)
-                sent += 1
+                # Send formatted messages for each pending item
+                for idx, pending_conv_id in enumerate(pending_list, 1):
+                    msg = _build_pending_message(mongo_client, pending_conv_id, idx)
+                    if msg:
+                        _send_message_to_zalo(access_token, str(staff_zalo_user_id), message_text=msg)
+                
+                if pending_count > 0:
+                    sent += 1
             except Exception as e:
                 logger.warning(f"Failed to notify staff {staff_account_id} zalo_user_id={staff_zalo_user_id}: {e}")
 
-            # Optional: also emit a socket event to the staff's account room (frontend may consume later)
+            # Optional: also emit a socket event to the staff's account room
             try:
                 if socketio and staff_account_id:
                     socketio.emit('support-needed', {
@@ -72,6 +162,7 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
                         'platform': platform,
                         'customer_name': customer_name,
                         'content': content,
+                        'pending_count': pending_count,
                         'organization_id': str(organization_id),
                     }, room=f"account:{str(staff_account_id)}")
             except Exception:
@@ -82,7 +173,8 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
             'sent': sent,
             'skipped_busy': skipped_busy,
             'skipped_no_zalo': skipped_no_zalo,
-            'skipped_no_staff': 0
+            'skipped_no_staff': 0,
+            'pending_count': pending_count
         }
     except Exception as e:
         logger.error(f"dispatch_support_needed error: {e}", exc_info=True)
@@ -224,21 +316,17 @@ def send_pending_list_to_staff(mongo_client, staff_account_id, organization_id, 
             logger.debug(f"No pending requests for {staff_account_id}")
             return {'success': True, 'pending_count': 0}
 
-        # Build pending message
-        title = "📋 DANH SÁCH YÊU CẦU CHỜ HỖ TRỢ"
-        lines = [title, ""]
-        for i, conv_id in enumerate(pending_list[:10], 1):  # Show max 10
-            lines.append(f"{i}. Mã: {conv_id}")
-        
-        if len(pending_list) > 10:
-            lines.append(f"\n... và {len(pending_list) - 10} yêu cầu khác")
-        
-        lines.extend(["", "Gõ: /accept"])
-        msg = "\n".join(lines)
-
-        # Send to staff's Zalo personal account
+        # Send formatted messages for each pending item (max 10)
         try:
-            _send_message_to_zalo(access_token, str(staff_zalo_id), message_text=msg)
+            for idx, conv_id in enumerate(pending_list[:10], 1):
+                msg = _build_pending_message(mongo_client, conv_id, idx)
+                if msg:
+                    _send_message_to_zalo(access_token, str(staff_zalo_id), message_text=msg)
+            
+            if len(pending_list) > 10:
+                more_msg = f"... và {len(pending_list) - 10} yêu cầu khác"
+                _send_message_to_zalo(access_token, str(staff_zalo_id), message_text=more_msg)
+            
             logger.debug(f"Sent pending list to staff {staff_zalo_id}: {len(pending_list)} items")
             return {'success': True, 'pending_count': len(pending_list)}
         except Exception as e:

@@ -23,14 +23,28 @@ def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_
         if not question:
             logger.debug('Auto-reply Zalo: empty question, skipping')
             return
+
+        auth = (Config.AI_API_USERNAME, Config.AI_API_PASSWORD)
         try:
-            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120)
+            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120, auth=auth)
             data = resp.json() if resp.status_code == 200 else {}
         except Exception as e:
             logger.error(f'Auto-reply Zalo API request failed: {e}')
             return
 
         answer = data.get('answer') if isinstance(data, dict) else None
+        needhelp_val = (data.get('needhelp') if isinstance(data, dict) else None)
+        needhelp = False
+        try:
+            if isinstance(needhelp_val, bool):
+                needhelp = needhelp_val
+            elif isinstance(needhelp_val, str):
+                needhelp = needhelp_val.strip().lower() in ('yes', 'y', 'true', '1')
+            elif isinstance(needhelp_val, (int, float)):
+                needhelp = bool(needhelp_val)
+        except Exception:
+            needhelp = False
+
         if not answer:
             logger.info(f'Auto-reply Zalo: no answer from API for question: {question}')
             # Mark conversation as bot-failed so UI shows handover-needed
@@ -41,6 +55,13 @@ def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_
                 if conv and conv.get('_id'):
                     # Set tags to bot-failed for this conversation
                     conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    # Disable bot_reply so subsequent customer messages don't auto-reply
+                    try:
+                        conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
+                        # ensure bot-failed tag remains after set_bot_reply_by_id adjusts tags
+                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    except Exception:
+                        pass
                     # Emit update so UI reflects failure
                     try:
                         org_fallback = organization_id or (conv.get('organizationId') if conv else None)
@@ -50,6 +71,7 @@ def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_
                             'oa_id': oa_id,
                             'customer_id': f"zalo:{customer_platform_id}",
                             'tags': 'bot-failed',
+                            'bot_reply': False,
                             'platform': 'zalo',
                         }
                         _emit_socket_to_account('update-conversation', payload, account_id_owner, org_fallback)
@@ -58,6 +80,42 @@ def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_
             except Exception:
                 pass
             return
+
+        # If AI indicates needhelp, we still send the answer to customer, then switch to "waiting support"
+        if needhelp:
+            try:
+                from models.conversation import ConversationModel
+                conv_model = ConversationModel(mongo_client)
+                conv = conv_model.find_by_oa_and_customer(oa_id, f"zalo:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
+                if conv and conv.get('_id'):
+                    try:
+                        conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
+                    except Exception:
+                        pass
+                    try:
+                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    except Exception:
+                        pass
+                    try:
+                        from utils.support_workflow import add_pending_support
+                        add_pending_support(organization_id or conv.get('organizationId'), f"zalo:{oa_id}:{customer_platform_id}")
+                    except Exception:
+                        pass
+                    try:
+                        from utils.support_dispatch import dispatch_support_needed
+                        dispatch_support_needed(
+                            mongo_client,
+                            organization_id or conv.get('organizationId'),
+                            f"zalo:{oa_id}:{customer_platform_id}",
+                            customer_name=(conv.get('customer_info') or {}).get('name') if isinstance(conv, dict) else None,
+                            content=question,
+                            platform='zalo',
+                            socketio=socketio
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         #TODO: HANDOVER IF BOT CAN NOT ANSWER -> TURN TO USER
         # from models.integration import IntegrationModel
@@ -695,18 +753,412 @@ def webhook_event():
     from models.conversation import ConversationModel
     from models.message import MessageModel
     from models.chatbot import ChatbotModel
+    from models.user import UserModel
 
     chatbot_model = ChatbotModel(current_app.mongo_client)
     customer_model = CustomerModel(current_app.mongo_client)
     conversation_model = ConversationModel(current_app.mongo_client)
     message_model = MessageModel(current_app.mongo_client)
+    user_model = UserModel(current_app.mongo_client)
 
     # Upsert customer (Zalo may not provide profile in webhook, so we'll fetch if needed)
     customer_id = f"zalo:{customer_platform_id}"
+
+    # IMPORTANT: preserve is_staff flag if this user is a staff Zalo ID
+    existing_customer = None
+    try:
+        existing_customer = customer_model.find_by_id(customer_id)
+    except Exception:
+        existing_customer = None
+
+    # Also figure out if there is a staff user record tied to this Zalo ID
+    staff_user = user_model.find_by_zalo_user_id(customer_platform_id)
+
+    # Determine if sender should be treated as a staff user.  We primarily
+    # look at the customer record (it may have been flagged previously), but we
+    # also regard anyone who has a UserModel entry as staff.
+    is_staff_sender = bool(existing_customer and existing_customer.get('is_staff')) or bool(staff_user)
+    if is_staff_sender and not (existing_customer and existing_customer.get('is_staff')):
+        # update customer record to mark as staff if needed
+        logger.debug(f"Auto-flagging zalo user {customer_platform_id} as staff per UserModel")
+
     customer_doc = customer_model.upsert_customer(
         platform='zalo',
         platform_specific_id=customer_platform_id,
+        is_staff=is_staff_sender
     )
+
+    # ===== Staff personal Zalo bridge (Session Binding) =====
+    # If the **sender** is a staff Zalo user id (i.e. the message originates from a staff
+    # personal account rather than the OA itself), we treat it as a staff-to-customer
+    # message and perform session binding/forwarding.  We avoid triggering on messages
+    # that are actually sent by the OA to a staff user.
+    if is_staff_sender and sender_id != oa_id:
+        try:
+            from models.message import MessageModel
+            from utils.support_workflow import get_staff_binding, set_staff_binding, clear_staff_binding, mark_staff_busy, clear_staff_busy, pop_pending_support
+            # user_model and staff_user have been initialized above
+            staff_account_id = staff_user.get('accountId') if staff_user else None
+            staff_name = (staff_user.get('name') or staff_user.get('username')) if staff_user else 'Nhân viên'
+            org_id = (staff_user.get('organizationId') if staff_user else None) or integration.get('organizationId')
+
+            logger.debug(f"Staff bridge triggered: staff_id={customer_platform_id}, account={staff_account_id}, org={org_id}, binding_before={get_staff_binding(str(customer_platform_id))}")
+
+            binding = get_staff_binding(str(customer_platform_id))
+            text_raw = (message or '').strip()
+
+            # Accept command: "/accept <conv_id>" or "/accept" to take oldest pending
+            if text_raw.lower().startswith('/accept'):
+                parts_cmd = text_raw.split(maxsplit=1)
+                target_conv_id = parts_cmd[1].strip() if len(parts_cmd) > 1 else None
+                if not target_conv_id:
+                    target_conv_id = pop_pending_support(org_id) if org_id else None
+                if not target_conv_id:
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không có yêu cầu hỗ trợ nào đang chờ.")
+                    return jsonify({'success': True}), 200
+
+                # Parse conv_id: "<platform>:<oa_id>:<sender_id>"
+                p = str(target_conv_id).split(':')
+                if len(p) != 3:
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="conv_id không hợp lệ.")
+                    return jsonify({'success': True}), 200
+                target_platform, target_oa_id, target_sender_id = p
+                target_platform = str(target_platform or '').strip().lower()
+                if target_platform not in ('zalo', 'facebook', 'instagram', 'widget'):
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Nền tảng không được hỗ trợ để tiếp nhận.")
+                    return jsonify({'success': True}), 200
+                if target_platform == 'widget':
+                    logger.info(f"Staff {customer_platform_id} is accepting widget conversation {target_conv_id} (oa={target_oa_id} sender={target_sender_id})")
+
+                # Lock the conversation for this staff (concurrency control)
+                from models.conversation import ConversationModel
+                conv_model = ConversationModel(current_app.mongo_client)
+                target_customer_id = f"{target_platform}:{target_sender_id}"
+                conv_doc = conv_model.find_by_oa_and_customer(target_oa_id, target_customer_id, organization_id=org_id, account_id=None)
+                if not conv_doc:
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không tìm thấy hội thoại để tiếp nhận.")
+                    return jsonify({'success': True}), 200
+                current = conv_doc.get('current_handler')
+                if current and current.get('accountId') and staff_account_id and str(current.get('accountId')) != str(staff_account_id):
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text=f"Yêu cầu đã được {current.get('name') or 'nhân viên khác'} tiếp nhận.")
+                    return jsonify({'success': True}), 200
+
+                locked = None
+                if staff_account_id:
+                    try:
+                        locked = conv_model.lock_by_id(conv_doc.get('_id'), staff_account_id, staff_name, ttl_seconds=300)
+                        logger.debug(f"Lock attempt result for conv {conv_doc.get('_id')}: {locked}")
+                        # record the staff's personal zalo id on the conversation so we can forward later
+                        try:
+                            conv_model.collection.update_one(
+                                {'_id': conv_doc.get('_id')},
+                                {'$set': {'current_handler.staff_zalo_id': str(customer_platform_id)}}
+                            )
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning(f"Lock by id failed: {e}")
+                else:
+                    # create a pseudo-lock using staff_name and their zalo_id for direct forwarding
+                    try:
+                        now = datetime.utcnow()
+                        expires_at = now + timedelta(seconds=300)
+                        conv_model.collection.update_one(
+                            {'_id': conv_doc.get('_id')},
+                            {'$set': {
+                                'current_handler': {
+                                    'accountId': staff_account_id,
+                                    'name': staff_name,
+                                    'started_at': now,
+                                    'staff_zalo_id': str(customer_platform_id),  # Store staff zalo id for forwarding
+                                },
+                                'lock_expires_at': expires_at,
+                                'updated_at': now,
+                                'tags': 'staff-interacting',
+                            }}
+                        )
+                        locked = conv_model._serialize(conv_model.collection.find_one({'_id': conv_doc.get('_id')}))
+                        logger.info("Pseudo-locked conversation for anonymous staff", extra={'conv_id': str(target_conv_id), 'staff_zalo': str(customer_platform_id)})
+                    except Exception as e:
+                        logger.warning(f"Failed to pseudo-lock conv for anonymous staff: {e}")
+                # ensure bot_reply is disabled when staff takes over
+                try:
+                    conv_model.set_bot_reply_by_id(conv_doc.get('_id'), False, account_id=staff_account_id, organization_id=org_id)
+                except Exception:
+                    pass
+
+                # Broadcast lock so website/dashboard updates immediately
+                try:
+                    socketio = getattr(current_app, 'socketio', None)
+                    if socketio and org_id:
+                        acc_room = f"account:{str(staff_account_id)}" if staff_account_id else None
+                        org_room = f"organization:{str(org_id)}"
+
+                        # emit to both account and org so frontend handles unread correctly
+                        if acc_room:
+                            socketio.emit('conversation-locked', {
+                                'conv_id': str(target_conv_id),
+                                'conversation_id': (locked.get('_id') if isinstance(locked, dict) else conv_doc.get('_id')),
+                                'handler': (locked.get('current_handler') if isinstance(locked, dict) else conv_doc.get('current_handler')),
+                                'lock_expires_at': (locked.get('lock_expires_at') if isinstance(locked, dict) else conv_doc.get('lock_expires_at')),
+                            }, room=acc_room)
+                        socketio.emit('conversation-locked', {
+                            'conv_id': str(target_conv_id),
+                            'conversation_id': (locked.get('_id') if isinstance(locked, dict) else conv_doc.get('_id')),
+                            'handler': (locked.get('current_handler') if isinstance(locked, dict) else conv_doc.get('current_handler')),
+                            'lock_expires_at': (locked.get('lock_expires_at') if isinstance(locked, dict) else conv_doc.get('lock_expires_at')),
+                        }, room=org_room)
+
+                        # tags & bot_reply update
+                        payload = {
+                            'conv_id': str(target_conv_id),
+                            'conversation_id': (locked.get('_id') if isinstance(locked, dict) else conv_doc.get('_id')),
+                            'oa_id': target_oa_id,
+                            'customer_id': target_customer_id,
+                            'tags': (locked.get('tags') if isinstance(locked, dict) else conv_doc.get('tags')),
+                            'bot_reply': False,
+                            'platform': target_platform
+                        }
+                        if acc_room:
+                            socketio.emit('update-conversation', payload, room=acc_room)
+                        socketio.emit('update-conversation', payload, room=org_room)
+                except Exception:
+                    pass
+
+                # Bind staff -> customer session
+                set_staff_binding(str(customer_platform_id), {
+                    'platform': target_platform,
+                    'oa_id': target_oa_id,
+                    'customer_user_id': target_sender_id,
+                    'conv_id': str(target_conv_id),
+                    'organizationId': org_id,
+                    'staff_account_id': staff_account_id,
+                })
+                logger.debug(f"Staff {customer_platform_id} bound to conv {target_conv_id}, busy={org_id and staff_account_id}")
+                if org_id and staff_account_id:
+                    mark_staff_busy(org_id, staff_account_id, str(target_conv_id))
+
+                # Send recent history summary (10-20 messages) + "Đã kết nối"
+                try:
+                    msg_model = MessageModel(current_app.mongo_client)
+                    conv_id_db = conv_doc.get('_id')
+                    # Prefer organization-scoped conversation query for all platforms
+                    if org_id and conv_id_db:
+                        recent = msg_model.get_by_organization_and_conversation(org_id, conv_id_db, limit=20, skip=0)
+                    else:
+                        recent = msg_model.get_messages(target_platform, target_oa_id, target_sender_id, limit=20, skip=0, conversation_id=conv_id_db, account_id=None)
+                    lines = []
+                    for m in recent[-20:]:
+                        who = 'Bot' if (m.get('bot_reply')) else ('Khách' if m.get('direction') == 'in' else 'OA')
+                        txt = (m.get('text') or '').strip()
+                        if txt:
+                            lines.append(f"[{who}]: \"{txt}\"")
+                    history_text = " ".join(lines)[-2800:] if lines else "(Không có lịch sử gần đây)"
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text=f"Lịch sử gần đây: {history_text}")
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Đã kết nối")
+                except Exception:
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Đã kết nối")
+
+                return jsonify({'success': True}), 200
+
+            # Handover command: "/chatbot" -> release binding + enable bot_reply
+            if text_raw.lower().startswith('/chatbot'):
+                if not binding:
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Bạn chưa ở trong phiên hỗ trợ nào.")
+                    return jsonify({'success': True}), 200
+                try:
+                    from models.conversation import ConversationModel
+                    conv_model = ConversationModel(current_app.mongo_client)
+                    target_conv_id = binding.get('conv_id')
+                    p = str(target_conv_id).split(':')
+                    if len(p) == 3:
+                        target_platform, target_oa_id, target_sender_id = p
+                        target_customer_id = f"{str(target_platform).strip().lower()}:{target_sender_id}"
+                        conv_doc = conv_model.find_by_oa_and_customer(target_oa_id, target_customer_id, organization_id=org_id, account_id=None)
+                        if conv_doc and conv_doc.get('_id'):
+                            # enable bot reply again
+                            conv_model.set_bot_reply_by_id(conv_doc.get('_id'), True, account_id=None, organization_id=org_id)
+                            # unlock if this staff is handler
+                            try:
+                                if staff_account_id:
+                                    conv_model.unlock_by_id(conv_doc.get('_id'), requester_account_id=staff_account_id, force=False)
+                            except Exception:
+                                pass
+                            # broadcast unlocked + state
+                            try:
+                                socketio = getattr(current_app, 'socketio', None)
+                                if socketio and org_id:
+                                    socketio.emit('conversation-unlocked', {
+                                        'conv_id': str(target_conv_id),
+                                        'conversation_id': conv_doc.get('_id')
+                                    }, room=f"organization:{str(org_id)}")
+                                    socketio.emit('update-conversation', {
+                                        'conv_id': str(target_conv_id),
+                                        'conversation_id': conv_doc.get('_id'),
+                                        'oa_id': target_oa_id,
+                                        'customer_id': target_customer_id,
+                                        'bot_reply': True,
+                                        'tags': 'bot-interacting',
+                                        'platform': str(target_platform).strip().lower()
+                                    }, room=f"organization:{str(org_id)}")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                try:
+                    clear_staff_binding(str(customer_platform_id))
+                except Exception:
+                    pass
+                try:
+                    if org_id and staff_account_id:
+                        clear_staff_busy(org_id, staff_account_id)
+                except Exception:
+                    pass
+                _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Đã chuyển lại cho chatbot.")
+                
+                # Send remaining pending requests to staff after handover
+                try:
+                    from utils.support_dispatch import send_pending_list_to_staff
+                    if org_id and staff_account_id:
+                        send_pending_list_to_staff(
+                            current_app.mongo_client,
+                            staff_account_id,
+                            org_id,
+                            integration.get('access_token')
+                        )
+                except Exception as e:
+                    logger.debug(f"Failed to send pending list after /chatbot: {e}")
+                
+                return jsonify({'success': True}), 200
+
+            # Normal staff message forwarding
+            logger.debug(f"Staff message received: binding={binding}, message={message}")
+            
+            # Check for /list command to show pending requests
+            if text_raw.lower().startswith('/list'):
+                try:
+                    from utils.support_dispatch import send_pending_list_to_staff
+                    if org_id and staff_account_id:
+                        result = send_pending_list_to_staff(
+                            current_app.mongo_client,
+                            staff_account_id,
+                            org_id,
+                            integration.get('access_token')
+                        )
+                        logger.debug(f"Sent pending list via /list command: {result}")
+                    else:
+                        _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không thể lấy danh sách yêu cầu. Vui lòng liên hệ quản trị viên.")
+                except Exception as e:
+                    logger.error(f"Error handling /list command: {e}")
+                return jsonify({'success': True}), 200
+            
+            if not binding:
+                _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Bạn chưa tiếp nhận hỗ trợ. Gõ `/accept` để tiếp nhận yêu cầu đang chờ.")
+                return jsonify({'success': True}), 200
+
+            target_conv_id = binding.get('conv_id')
+            p = str(target_conv_id).split(':')
+            if len(p) != 3:
+                _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Phiên hỗ trợ không hợp lệ. Hãy /accept lại.")
+                return jsonify({'success': True}), 200
+            target_platform, target_oa_id, target_sender_id = p
+            target_platform = str(target_platform or '').strip().lower()
+            target_customer_id = f"{target_platform}:{target_sender_id}"
+
+            # Forward to customer on the original platform (bridge)
+            if not message:
+                logger.warning(f"Staff message has no content, skipping forward: staff={customer_platform_id}")
+            try:
+                # platform send
+                send_resp = None
+                owner_account_id = None
+                if target_platform in ('facebook', 'instagram'):
+                    from routes.facebook import _send_message_to_facebook
+                    im = IntegrationModel(current_app.mongo_client)
+                    plat_integration = im.find_by_platform_and_oa('facebook', target_oa_id)
+                    if not plat_integration or (plat_integration.get('organizationId') and org_id and str(plat_integration.get('organizationId')) != str(org_id)):
+                        _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không tìm thấy kết nối Facebook/Instagram để gửi tin.")
+                        return jsonify({'success': True}), 200
+                    owner_account_id = plat_integration.get('accountId')
+                    send_resp = _send_message_to_facebook(plat_integration.get('access_token'), target_sender_id, message_text=message)
+                elif target_platform == 'zalo':
+                    im = IntegrationModel(current_app.mongo_client)
+                    zalo_int = im.find_by_platform_and_oa('zalo', target_oa_id)
+                    if not zalo_int or (zalo_int.get('organizationId') and org_id and str(zalo_int.get('organizationId')) != str(org_id)):
+                        _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không tìm thấy kết nối Zalo OA để gửi tin.")
+                        return jsonify({'success': True}), 200
+                    owner_account_id = zalo_int.get('accountId')
+                    send_resp = _send_message_to_zalo(zalo_int.get('access_token'), target_sender_id, message_text=message)
+                elif target_platform == 'widget':
+                    # no external send needed; dashboard/widget will update via socket below
+                    send_resp = {'status': 'widget'}
+                else:
+                    _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Nền tảng chưa hỗ trợ bridge.")
+                    return jsonify({'success': True}), 200
+
+                # Persist as outgoing message on the real customer conversation so dashboard updates
+                from models.conversation import ConversationModel
+                conv_model = ConversationModel(current_app.mongo_client)
+                conv_doc = conv_model.find_by_oa_and_customer(target_oa_id, target_customer_id, organization_id=org_id, account_id=None)
+                conv_db_id = conv_doc.get('_id') if conv_doc else None
+                mm = MessageModel(current_app.mongo_client)
+
+                sender_id_for_store = (staff_account_id if target_platform == 'widget' else target_sender_id)
+                sent_doc = mm.add_message(
+                    platform=target_platform,
+                    oa_id=target_oa_id,
+                    sender_id=sender_id_for_store,
+                    direction='out',
+                    text=message,
+                    metadata={'bridge': True, 'from_staff_zalo_user_id': str(customer_platform_id), 'send_response': send_resp},
+                    bot_reply=False,
+                    tags='staff-interacting',
+                    is_read=True,
+                    conversation_id=conv_db_id,
+                    account_id=owner_account_id,
+                    organization_id=org_id,
+                )
+                conv_model.upsert_conversation(
+                    oa_id=target_oa_id,
+                    customer_id=target_customer_id,
+                    last_message_text=message or 'Tệp đính kèm',
+                    last_message_created_at=datetime.utcnow(),
+                    direction='out',
+                    account_id=owner_account_id,
+                    organization_id=org_id,
+                )
+
+                # Emit to org/account so everyone sees read-only updates
+                _emit_socket_to_account('new-message', {
+                    'platform': target_platform,
+                    'oa_id': target_oa_id,
+                    'sender_id': target_sender_id,
+                    'message': message,
+                    'message_doc': sent_doc,
+                    'bot_reply': False,
+                    'conv_id': str(target_conv_id),
+                    'conversation_id': conv_db_id,
+                    'sent_at': datetime.utcnow().isoformat() + 'Z',
+                    'direction': 'out',
+                }, owner_account_id, org_id)
+
+                _emit_socket_to_account('update-conversation', {
+                    'conv_id': str(target_conv_id),
+                    'conversation_id': conv_db_id,
+                    'oa_id': target_oa_id,
+                    'customer_id': target_customer_id,
+                    'last_message': {'text': message, 'created_at': datetime.utcnow().isoformat() + 'Z'},
+                    'tags': (conv_doc.get('tags') if isinstance(conv_doc, dict) else None),
+                    'platform': target_platform
+                }, owner_account_id, org_id)
+            except Exception as e:
+                logger.error(f"Error forwarding staff message: {e}", exc_info=True)
+
+            return jsonify({'success': True}), 200
+        except Exception as e:
+            logger.error(f"Staff bridge handler error: {e}", exc_info=True)
+            return jsonify({'success': True}), 200
+    # ===== End staff bridge =====
 
     # If profile info is missing (name or avatar), attempt to fetch it from Zalo OA API
     try:
@@ -886,6 +1338,21 @@ def webhook_event():
     except Exception as e:
         logger.error(f"Failed to persist Zalo message: {e}")
         message_doc = None
+
+    # Forward incoming customer messages to active staff handler (two-way bridge)
+    if direction == 'in' and message and not is_staff_sender and conversation_id:
+        try:
+            from utils.support_dispatch import forward_customer_message_to_staff
+            logger.info(f"Attempting to forward customer message: conv_id={conversation_id}, is_staff={is_staff_sender}, dir={direction}")
+            result = forward_customer_message_to_staff(
+                current_app.mongo_client,
+                conversation_id,
+                message,
+                integration.get('oa_id')
+            )
+            logger.info(f"Forward result: {result}")
+        except Exception as e:
+            logger.error(f"Could not forward customer message to staff: {e}", exc_info=True)
 
     # Build conversation ID for frontend (legacy format)
     conv_id = f"zalo:{integration.get('oa_id')}:{customer_platform_id}"

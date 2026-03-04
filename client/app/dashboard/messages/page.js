@@ -167,7 +167,7 @@ export default function ChatManagementPage() {
       try {
         updateConversationInList(selectedChat.id, { isUnread: false });
         window.dispatchEvent(new CustomEvent('reset-conversation-unread', {
-          detail: { conversations: selectedChat.id }
+          detail: { conversationId: selectedChat.id }
         }));
 
         if (selectedChat.platform === 'zalo') {
@@ -378,7 +378,9 @@ export default function ChatManagementPage() {
           (async () => {
             try {
               updateConversationInList(convId, { isUnread: false });
-              window.dispatchEvent(new CustomEvent('reset-conversation-unread', { detail: { conversations: convId } }));
+              window.dispatchEvent(new CustomEvent('reset-conversation-unread', {
+                detail: { conversationId: convId }
+              }));
               if (payload.platform === 'zalo') {
                 await markZaloConversationRead(accountId, convId);
               } else if (payload.platform === 'widget') {

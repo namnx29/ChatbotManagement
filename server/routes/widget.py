@@ -12,6 +12,7 @@ import threading
 import requests
 from routes.facebook import _emit_socket, EXTERNAL_CHAT_API
 from routes.zalo import _send_message_to_zalo
+from config import Config
 
 widget_bp = Blueprint('widget', __name__)
 logger = logging.getLogger(__name__)
@@ -28,18 +29,80 @@ def _auto_reply_worker_widget(mongo_client, oa_id, customer_id, conversation_id,
             logger.debug("Widget auto-reply: empty question, skipping")
             return
 
+        auth = (Config.AI_API_USERNAME, Config.AI_API_PASSWORD)
         # Call external chat API (microtunchat)
         try:
-            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120)
+            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120, auth=auth)
             data = resp.json() if resp.status_code == 200 else {}
         except Exception as e:
             logger.error(f"Widget auto-reply API request failed: {e}")
             return
 
         answer = data.get('answer') if isinstance(data, dict) else None
+        needhelp_val = (data.get('needhelp') if isinstance(data, dict) else None)
+        needhelp = False
+        try:
+            if isinstance(needhelp_val, bool):
+                needhelp = needhelp_val
+            elif isinstance(needhelp_val, str):
+                needhelp = needhelp_val.strip().lower() in ('yes', 'y', 'true', '1')
+            elif isinstance(needhelp_val, (int, float)):
+                needhelp = bool(needhelp_val)
+        except Exception:
+            needhelp = False
         if not answer:
             logger.info(f"Widget auto-reply: no answer from API for question: {question}")
             return
+
+        # If needhelp: after sending the answer, disable bot_reply and tag bot-failed so staff can take over
+        if needhelp:
+            try:
+                from models.conversation import ConversationModel
+                from utils.support_workflow import add_pending_support
+                from bson.objectid import ObjectId
+                from utils.support_dispatch import dispatch_support_needed
+
+                conv_model = ConversationModel(mongo_client)
+                # conversation_id is the DB _id (string) for this widget conversation
+                try:
+                    conv_model.set_bot_reply_by_id(conversation_id, False, organization_id=organization_id)
+                except Exception:
+                    pass
+
+                # Ensure tag persists as bot-failed (set_bot_reply_by_id may unset tags when no handler)
+                try:
+                    conv_obj_id = ObjectId(conversation_id)
+                except Exception:
+                    conv_obj_id = conversation_id
+                try:
+                    conv_model.collection.update_one(
+                        {'_id': conv_obj_id},
+                        {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}}
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    add_pending_support(
+                        organization_id,
+                        f"widget:{oa_id}:{customer_id.split(':', 1)[1] if ':' in customer_id else customer_id}"
+                    )
+                except Exception:
+                    pass
+                try:
+                    dispatch_support_needed(
+                        mongo_client,
+                        organization_id,
+                        f"widget:{oa_id}:{customer_id.split(':', 1)[1] if ':' in customer_id else customer_id}",
+                        customer_name=None,
+                        content=question,
+                        platform='widget',
+                        socketio=socketio
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
         
         #TODO: HANDOVER IF BOT CAN NOT ANSWER -> TURN TO USER
         # answer = "Luuvaodbtest"
@@ -283,12 +346,20 @@ def submit_lead():
             }
             if socketio:
                 org_room = f"organization:{str(org_id)}"
+                acc_room = f"account:{str(account_id)}" if account_id else None
+
+                # emit to both account and organization rooms
+                if acc_room:
+                    try:
+                        socketio.emit('new-message', payload, room=acc_room)
+                    except TypeError:
+                        socketio.emit('new-message', payload, room=acc_room)
                 try:
                     socketio.emit('new-message', payload, room=org_room)
                 except TypeError:
                     socketio.emit('new-message', payload, room=org_room)
 
-                socketio.emit('update-conversation', {
+                convo_payload = {
                     'conversation_id': conversation_id_str,
                     'conv_id': conv_id_formatted,
                     'oa_id': oa_id,
@@ -299,7 +370,10 @@ def submit_lead():
                     'platform': 'widget',
                     'bot_reply': conv.get('bot_reply'),
                     'tags': conv.get('tags'),
-                }, room=org_room)
+                }
+                if acc_room:
+                    socketio.emit('update-conversation', convo_payload, room=acc_room)
+                socketio.emit('update-conversation', convo_payload, room=org_room)
         except Exception as e:
             logger.debug(f"Widget socket emit failed: {e}")
 
@@ -593,6 +667,19 @@ def send_conversation_message(conv_id):
                 account_id=None,
                 sender_profile=sender_profile,
             )
+            # forward incoming customer message to staff if someone is handling
+            try:
+                from utils.support_dispatch import forward_customer_message_to_staff
+                logger.info(f"Widget incoming msg, attempting forward: conv={conversation_id}")
+                result = forward_customer_message_to_staff(
+                    current_app.mongo_client,
+                    conversation_id,
+                    text or "",
+                    oa_id
+                )
+                logger.info(f"Widget forward result: {result}")
+            except Exception as e:
+                logger.error(f"Failed to forward widget customer message to staff: {e}", exc_info=True)
         
         # 4. Update Conversation State (direction depends on sender)
         msg_direction = 'out' if account_id else 'in'

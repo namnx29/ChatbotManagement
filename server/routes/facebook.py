@@ -88,15 +88,28 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
         if not question:
             logger.debug("Auto-reply: empty question, skipping")
             return
+        
+        auth = (Config.AI_API_USERNAME, Config.AI_API_PASSWORD)
 
         try:
-            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120)
+            resp = requests.post(EXTERNAL_CHAT_API, json={'question': question}, timeout=120, auth=auth)
             data = resp.json() if resp.status_code == 200 else {}
         except Exception as e:
             logger.error(f"Auto-reply API request failed: {e}")
             return
 
         answer = data.get('answer') if isinstance(data, dict) else None
+        needhelp_val = (data.get('needhelp') if isinstance(data, dict) else None)
+        needhelp = False
+        try:
+            if isinstance(needhelp_val, bool):
+                needhelp = needhelp_val
+            elif isinstance(needhelp_val, str):
+                needhelp = needhelp_val.strip().lower() in ('yes', 'y', 'true', '1')
+            elif isinstance(needhelp_val, (int, float)):
+                needhelp = bool(needhelp_val)
+        except Exception:
+            needhelp = False
         if not answer:
             logger.info(f"Auto-reply: no answer from API for question: {question}")
             # Mark conversation as bot-failed so UI shows handover-needed
@@ -107,6 +120,11 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                 if conv and conv.get('_id'):
                     conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     try:
+                        conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
+                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    except Exception:
+                        pass
+                    try:
                         org_fallback = organization_id or (conv.get('organizationId') if conv else None)
                         payload = {
                             'conversation_id': conv.get('_id'),
@@ -114,6 +132,7 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                             'oa_id': oa_id,
                             'customer_id': f"facebook:{customer_platform_id}",
                             'tags': 'bot-failed',
+                            'bot_reply': False,
                             'platform': 'facebook',
                         }
                         _emit_socket('update-conversation', payload, account_id=account_id_owner, organization_id=org_fallback)
@@ -122,6 +141,42 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
             except Exception:
                 pass
             return
+
+        # If needhelp is requested, after sending the answer we will switch the conversation to bot-failed + bot_reply False
+        if needhelp:
+            try:
+                from models.conversation import ConversationModel
+                from utils.support_workflow import add_pending_support
+                conv_model = ConversationModel(mongo_client)
+                conv = conv_model.find_by_oa_and_customer(oa_id, f"facebook:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
+                if conv and conv.get('_id'):
+                    try:
+                        conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
+                    except Exception:
+                        pass
+                    try:
+                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    except Exception:
+                        pass
+                    try:
+                        add_pending_support(organization_id or conv.get('organizationId'), f"facebook:{oa_id}:{customer_platform_id}")
+                    except Exception:
+                        pass
+                    try:
+                        from utils.support_dispatch import dispatch_support_needed
+                        dispatch_support_needed(
+                            mongo_client,
+                            organization_id or conv.get('organizationId'),
+                            f"facebook:{oa_id}:{customer_platform_id}",
+                            customer_name=(conv.get('customer_info') or {}).get('name') if isinstance(conv, dict) else None,
+                            content=question,
+                            platform='facebook',
+                            socketio=socketio
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         #TODO: HANDOVER IF BOT CAN NOT ANSWER -> TURN TO USER
         # answer = 'test'
@@ -843,6 +898,18 @@ def webhook_event():
                         logger.info(f'Emitted update-conversation to account {account_id_owner} and org {integration.get("organizationId")} via socket')
             except Exception:
                 logger.error('Failed to emit update-conversation via socket')
+
+            # Forward incoming customer messages to assigned staff (if any)
+            try:
+                if direction == 'in' and not deduped:
+                    try:
+                        from utils.support_dispatch import forward_customer_message_to_staff
+                        result = forward_customer_message_to_staff(current_app.mongo_client, conversation_id, message_text, integration.get('oa_id'))
+                        logger.info(f'forward_customer_message_to_staff result: {result}')
+                    except Exception as e:
+                        logger.error(f'Failed to forward incoming Facebook message to staff: {e}')
+            except Exception:
+                pass
 
             # If auto-reply is enabled for this conversation, schedule background worker
             try:

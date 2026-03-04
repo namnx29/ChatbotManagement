@@ -110,6 +110,12 @@ class UserModel:
     def find_by_account_id(self, account_id):
         """Find user by accountId"""
         return self.collection.find_one({'accountId': account_id})
+
+    def find_by_zalo_user_id(self, zalo_user_id):
+        """Find a staff user by linked Zalo personal user id."""
+        if not zalo_user_id:
+            return None
+        return self.collection.find_one({'zalo_user_id': str(zalo_user_id)})
     
     def verify_password(self, user, password, role='admin'):
         """

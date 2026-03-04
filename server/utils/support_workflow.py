@@ -123,3 +123,26 @@ def pop_pending_support(organization_id: str):
         pass
     return conv_id
 
+
+def remove_pending_support(organization_id: str, conv_id: str):
+    """Remove a specific conv_id from the pending list for the org. Returns updated list or None."""
+    if not organization_id or not conv_id:
+        return None
+    key = _key_pending(organization_id)
+    raw = get_key(key)
+    try:
+        items = json.loads(raw) if raw else []
+        if not isinstance(items, list):
+            items = []
+    except Exception:
+        items = []
+
+    # Remove the specific conv_id
+    conv_id_str = str(conv_id)
+    items = [x for x in items if str(x) != conv_id_str]
+    try:
+        set_key(key, json.dumps(items), ex=DEFAULT_PENDING_TTL_SECONDS)
+    except Exception:
+        pass
+    return items
+

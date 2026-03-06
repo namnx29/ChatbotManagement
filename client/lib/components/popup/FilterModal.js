@@ -1,51 +1,42 @@
 'use client';
 
-import { Modal, Checkbox, Button } from 'antd';
+import { Modal, Checkbox, Button, Radio } from 'antd';
 import { DownOutlined, UpOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
-export default function FilterModal({ open, onClose }) {
+export default function FilterModal({ open, onClose, initialFilters = {}, bots = [], onApply = () => { }, onReset = () => { } }) {
 	const [selectedFilters, setSelectedFilters] = useState({
 		channels: [],
 		conversationStatus: [],
-		replyStatus: [],
 		bots: [],
 		tags: [],
 	});
 
+	// Sync filters when the modal opens or when initial filters update
+	useEffect(() => {
+		if (!open) return;
+		setSelectedFilters({
+			channels: initialFilters.channels || [],
+			conversationStatus: initialFilters.conversationStatus || [],
+			bots: initialFilters.bots || [],
+			tags: initialFilters.tags || [],
+		});
+	}, [open, initialFilters]);
+
 	const [expandedSections, setExpandedSections] = useState({
 		channel: false,
 		conversationStatus: false,
-		replyStatus: false,
 		bot: false,
 		tags: false,
 	});
 
 	const channels = [
 		{ value: 'facebook', label: 'Facebook' },
-		{ value: 'instagram', label: 'Instagram' },
 		{ value: 'zalo', label: 'Zalo' },
+		{ value: 'widget', label: 'Website' },
 	];
 
-	const conversationStatuses = [
-		{ value: 'consult', label: 'Tư vấn', color: "#b0d4e5" },
-		{ value: 'potential', label: 'Tiềm năng', color: "#fad719" },
-		{ value: 'deal', label: 'Chốt đơn', color: "#2ecc2e" },
-		{ value: 'cancel', label: 'Hủy đơn', color: "#d2d2d2" },
-		{ value: 'deny', label: 'Từ chối', color: "#fe8a47ff" },
-		{ value: 'regular', label: 'Khách quen', color: "#956fde" },
-		{ value: 'spam', label: 'Spam', color: "#ff4500" },
-	];
-
-	const replyStatuses = [
-		{ value: 'replied', label: 'Đã trả lời' },
-		{ value: 'pending', label: 'Chờ trả lời' },
-	];
-
-	const bots = [
-		{ value: 'bot1', label: 'Bot Demo' },
-		{ value: 'bot2', label: 'Bot Sales' },
-	];
+	const botOptions = bots.map(bot => ({ value: bot.id || bot.value, label: bot.name || bot.label }));
 
 	const tags = [
 		{ value: 'bot-failed', label: 'Bot không trả lời được', color: '#ff4d4f' },
@@ -68,17 +59,19 @@ export default function FilterModal({ open, onClose }) {
 	};
 
 	const handleApply = () => {
+		onApply(selectedFilters);
 		onClose();
 	};
 
 	const handleReset = () => {
-		setSelectedFilters({
+		const resetFilters = {
 			channels: [],
 			conversationStatus: [],
-			replyStatus: [],
 			bots: [],
 			tags: [],
-		});
+		};
+		setSelectedFilters(resetFilters);
+		onReset(resetFilters);
 	};
 
 	return (
@@ -241,101 +234,6 @@ export default function FilterModal({ open, onClose }) {
 								</div>
 							)}
 						</div> */}
-
-						{/* Trạng thái trả lời */}
-						<div
-							style={{
-								borderBottom: '1px solid #f0f0f0',
-							}}
-						>
-							<div
-								style={{
-									padding: '16px 24px',
-									display: 'flex',
-									justifyContent: 'space-between',
-									alignItems: 'center',
-									cursor: 'pointer',
-								}}
-								onClick={() => toggleSection('replyStatus')}
-							>
-								<span style={{ fontSize: '15px', fontWeight: '500' }}>
-									Trạng thái trả lời
-								</span>
-								{expandedSections.replyStatus ? (
-									<UpOutlined style={{ fontSize: '12px', color: '#999' }} />
-								) : (
-									<DownOutlined style={{ fontSize: '12px', color: '#999' }} />
-								)}
-							</div>
-							{expandedSections.replyStatus && (
-								<div style={{ padding: '0 24px 16px' }}>
-									<Checkbox.Group
-										value={selectedFilters.replyStatus}
-										onChange={(values) => handleFilterChange('replyStatus', values)}
-										style={{ width: '100%' }}
-									>
-										<div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-											{replyStatuses.map((status) => (
-												<Checkbox key={status.value} value={status.value}>
-													{status.label}
-												</Checkbox>
-											))}
-										</div>
-									</Checkbox.Group>
-								</div>
-							)}
-						</div>
-					</div>
-
-					{/* Right Column */}
-					<div
-						style={{
-							flex: 1,
-							overflowY: 'auto',
-						}}
-					>
-						{/* Bot */}
-						<div
-							style={{
-								borderBottom: '1px solid #f0f0f0',
-							}}
-						>
-							<div
-								style={{
-									padding: '16px 24px',
-									display: 'flex',
-									justifyContent: 'space-between',
-									alignItems: 'center',
-									cursor: 'pointer',
-								}}
-								onClick={() => toggleSection('bot')}
-							>
-								<span style={{ fontSize: '15px', fontWeight: '500' }}>Bot</span>
-								{expandedSections.bot ? (
-									<UpOutlined style={{ fontSize: '12px', color: '#999' }} />
-								) : (
-									<DownOutlined style={{ fontSize: '12px', color: '#999' }} />
-								)}
-							</div>
-							{expandedSections.bot && (
-								<div style={{ padding: '0 24px 16px' }}>
-									<Checkbox.Group
-										value={selectedFilters.bots}
-										onChange={(values) => handleFilterChange('bots', values)}
-										style={{ width: '100%' }}
-									>
-										<div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-											{bots.map((bot) => (
-												<Checkbox key={bot.value} value={bot.value}>
-													{bot.label}
-												</Checkbox>
-											))}
-										</div>
-									</Checkbox.Group>
-								</div>
-							)}
-						</div>
-
 						{/* Tags */}
 						<div style={{ borderBottom: '1px solid #f0f0f0' }}>
 							<div
@@ -392,6 +290,60 @@ export default function FilterModal({ open, onClose }) {
 								</div>
 							)}
 						</div>
+
+					</div>
+					{/* Right Column */}
+					<div
+						style={{
+							flex: 1,
+							overflowY: 'auto',
+						}}
+					>
+						<div
+							style={{
+								borderBottom: '1px solid #f0f0f0',
+							}}
+						>
+							<div
+								style={{
+									padding: '16px 24px',
+									display: 'flex',
+									justifyContent: 'space-between',
+									alignItems: 'center',
+									cursor: 'pointer',
+								}}
+								onClick={() => toggleSection('bot')}
+							>
+								<span style={{ fontSize: '15px', fontWeight: '500' }}>Bot</span>
+								{expandedSections.bot ? (
+									<UpOutlined style={{ fontSize: '12px', color: '#999' }} />
+								) : (
+									<DownOutlined style={{ fontSize: '12px', color: '#999' }} />
+								)}
+							</div>
+							{expandedSections.bot && (
+								<div style={{ padding: '0 24px 16px' }}>
+									<Checkbox.Group
+										value={selectedFilters.bots}
+										onChange={(values) => handleFilterChange('bots', values)}
+										style={{ width: '100%' }}
+									>
+										<div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+											{botOptions.length === 0 ? (
+												<div style={{ color: '#999' }}>Không có chatbot nào</div>
+											) : (
+												botOptions.map((bot) => (
+													<Checkbox key={bot.value} value={bot.value}>
+														{bot.label}
+													</Checkbox>
+												))
+											)}
+										</div>
+									</Checkbox.Group>
+								</div>
+							)}
+
+						</div>
 					</div>
 				</div>
 			</div>
@@ -421,6 +373,6 @@ export default function FilterModal({ open, onClose }) {
 					Áp dụng
 				</Button>
 			</div>
-		</Modal>
+		</Modal >
 	);
 }

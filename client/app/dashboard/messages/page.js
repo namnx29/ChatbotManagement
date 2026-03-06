@@ -12,6 +12,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useTransition } from
 import { io } from 'socket.io-client';
 import {
   listAllConversations,
+  listChatbots,
   getConversationMessages,
   sendConversationMessage,
   sendConversationAttachment,
@@ -67,6 +68,16 @@ export default function ChatManagementPage() {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [isPending, startTransition] = useTransition();
+
+  const [chatbots, setChatbots] = useState([]);
+  const [filters, setFilters] = useState({
+    platforms: [],
+    bots: [],
+    tags: [],
+    readStatus: null,
+  });
+
+  const isUnreadFilterActive = filters.readStatus?.includes('unread');
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -294,6 +305,7 @@ export default function ChatManagementPage() {
             oa_id: payload.oa_id,
             platform_status: { is_connected: true, disconnected_at: null },
             chatbot_info: payload.chatbot_info || {},
+            chatbot_id: payload.chatbot_id || null,
             phone: payload.customer_info?.phone || null,
           }, ...prev];
         }
@@ -557,8 +569,9 @@ export default function ChatManagementPage() {
           lock_expires_at: c.lock_expires_at || null,
           platform_status: c.platform_status || { is_connected: true, disconnected_at: null },
           chatbot_info: c.chatbot_info || {},
-            bot_reply: c.bot_reply || null,
-            tags: c.tags || null,
+          chatbot_id: c.chatbot_id|| null,
+          bot_reply: c.bot_reply || null,
+          tags: c.tags || null,
           phone: c.phone || null,
           note: c.note || '',
         }));
@@ -582,6 +595,29 @@ export default function ChatManagementPage() {
     };
 
     loadConversations();
+
+    return () => {
+      mounted = false;
+    };
+  }, [accountId]);
+
+  // Load chatbots list for filter modal
+  useEffect(() => {
+    let mounted = true;
+
+    const loadChatbots = async () => {
+      if (!accountId) return;
+      try {
+        const res = await listChatbots(accountId);
+        if (mounted && res?.data) {
+          setChatbots(res.data);
+        }
+      } catch (error) {
+        console.error('Failed to load chatbots:', error);
+      }
+    };
+
+    loadChatbots();
 
     return () => {
       mounted = false;
@@ -656,6 +692,35 @@ export default function ChatManagementPage() {
       });
     }
   }, [accountId, mapMessageDocToClient, updateConversationInList, setActiveConversation]);
+
+  // Handler to apply filters from modal
+  const handleApplyFilters = useCallback((newFilters) => {
+    setFilters({
+      platforms: newFilters.channels || [],
+      bots: newFilters.bots || [],
+      tags: newFilters.tags || [],
+      readStatus: newFilters.readStatus ?? null,
+    });
+  }, []);
+
+  const handleResetFilters = useCallback(() => {
+    setFilters({
+      platforms: [],
+      bots: [],
+      tags: [],
+      readStatus: null
+    });
+  }, []);
+
+  const toggleUnreadFilter = useCallback(() => {
+    setFilters(prev => {
+      const hasUnread = prev.readStatus?.includes('unread');
+      return {
+        ...prev,
+        readStatus: hasUnread ? [] : ['unread'],
+      };
+    });
+  }, []);
 
   // Handler to load older messages (lazy-load / infinite scroll)
   const handleLoadMoreMessages = useCallback(async () => {
@@ -853,10 +918,50 @@ export default function ChatManagementPage() {
   const filteredConversations = useMemo(() => {
     const query = debouncedSearch.trim().toLowerCase();
 
+    // combine dropdown channel filter and modal platform filters
+    const platformFilterSet = new Set();
+    if (filterChannel !== 'all') {
+      platformFilterSet.add(filterChannel);
+    }
+    (filters.platforms || []).forEach(p => platformFilterSet.add(p));
+
     return conversations.filter(conv => {
-      // Channel filter
-      if (filterChannel !== 'all' && conv.platform !== filterChannel) {
+      // Platform filter (channel)
+      if (platformFilterSet.size > 0 && !platformFilterSet.has(conv.platform)) {
         return false;
+      }
+
+      // Bot filter
+      if (filters.bots?.length) {
+        const convBotId = conv.chatbot_id || conv.chatbot_info?.id || conv.chatbot_info?.chatbot_id;
+        if (!convBotId || !filters.bots.includes(convBotId)) {
+          return false;
+        }
+      }
+
+      // Tag filter
+      if (filters.tags?.length) {
+        const convTags = conv.tags
+          ? Array.isArray(conv.tags)
+            ? conv.tags
+            : [conv.tags]
+          : [];
+        const matchesTag = convTags.some(tag => filters.tags.includes(tag));
+        if (!matchesTag) return false;
+      }
+
+      // Read status filter
+      if (filters.readStatus?.length && filters.readStatus.length < 2) {
+        const isUnread = !!conv.isUnread;
+        if (filters.readStatus.includes('unread') && !isUnread) return false;
+        if (filters.readStatus.includes('read') && isUnread) return false;
+      }
+
+      // Reply status filter (bot reply)
+      if (filters.replyStatus?.length && filters.replyStatus.length < 2) {
+        const botReplied = !!conv.bot_reply;
+        if (filters.replyStatus.includes('replied') && !botReplied) return false;
+        if (filters.replyStatus.includes('pending') && botReplied) return false;
       }
 
       // Search filter
@@ -874,7 +979,7 @@ export default function ChatManagementPage() {
 
       return true;
     });
-  }, [conversations, filterChannel, debouncedSearch]);
+  }, [conversations, filterChannel, debouncedSearch, filters]);
 
   // Render helper for select options
   // Update this function in your code
@@ -1029,7 +1134,9 @@ export default function ChatManagementPage() {
         >
           <Button
             icon={<SwapOutlined rotate={90} />}
+            type={isUnreadFilterActive ? 'primary' : 'default'}
             style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+            onClick={toggleUnreadFilter}
           >
             Chưa đọc
           </Button>
@@ -1101,7 +1208,20 @@ export default function ChatManagementPage() {
       </Content>
 
       {/* Filter Modal */}
-      <FilterModal open={isFilterModalOpen} onClose={() => setIsFilterModalOpen(false)} />
+      <FilterModal
+        open={isFilterModalOpen}
+        onClose={() => setIsFilterModalOpen(false)}
+        bots={chatbots}
+        initialFilters={{
+          channels: filters.platforms,
+          bots: filters.bots,
+          tags: filters.tags,
+          readStatus: filters.readStatus,
+          replyStatus: filters.replyStatus,
+        }}
+        onApply={handleApplyFilters}
+        onReset={handleResetFilters}
+      />
     </Layout>
   );
 }

@@ -354,7 +354,7 @@ def get_all_conversations():
                     'id': conversation_id,
                     'oa_id': oa_id,
                     'customer_id': conv.get('customer_id'),
-                    'chatbot_id': None,
+                    'chatbot_id': conv.get('chatbot_id'),
                     'chatbot_info': conv.get('chatbot_info', {}),
                     'platform': platform,
                     'name': nick_name or conv.get('display_name') or 'Khách hàng',

@@ -43,7 +43,7 @@ const MOBILE_BREAKPOINT = 768;
 
 function DashboardLayoutContent({ children }) {
   const { hasUnread } = useNotification();
-  const { message } = App.useApp();
+  const { message, notification } = App.useApp();
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
@@ -143,6 +143,47 @@ function DashboardLayoutContent({ children }) {
     return () =>
       window.removeEventListener("messageStatsUpdated", handleStatsUpdate);
   }, []);
+
+  // Global: show in-app notification when API returns needhelp=yes (support needed)
+  // Works on any dashboard page (messages, profile, training-chatbot, etc.)
+  useEffect(() => {
+    const handleSupportNeeded = (event) => {
+      const payload = event.detail || {};
+      const customerName = payload.customer_name || "Khách hàng";
+      const text = payload.text || payload.content || `Khách hàng ${customerName} cần hỗ trợ`;
+      const platform = payload.platform || "";
+      const platformLabel = { zalo: "Zalo", facebook: "Facebook", widget: "Website" }[platform] || platform || "Tin nhắn";
+
+      notification.warning({
+        title: "Yêu cầu hỗ trợ",
+        description: (
+          <div>
+            <div style={{ marginBottom: 8 }}>{text}</div>
+            {platform && (
+              <span style={{ fontSize: 12, color: "#666" }}>Nền tảng: {platformLabel}</span>
+            )}
+          </div>
+        ),
+        placement: "topRight",
+        duration: 8,
+        actions: pathname?.startsWith("/dashboard/messages") ? null : (
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => {
+              router.push("/dashboard/messages");
+              notification.destroy();
+            }}
+          >
+            Mở tin nhắn
+          </Button>
+        ),
+      });
+    };
+
+    window.addEventListener("support-needed", handleSupportNeeded);
+    return () => window.removeEventListener("support-needed", handleSupportNeeded);
+  }, [notification, pathname, router]);
 
   // Fetch initial message stats when component mounts
   useEffect(() => {

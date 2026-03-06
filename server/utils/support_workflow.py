@@ -27,6 +27,34 @@ def _key_pending(organization_id: str) -> str:
     return f"support:pending:{organization_id}"
 
 
+def get_pending_support_list(organization_id: str) -> list:
+    """Return the pending support list for an org (best-effort)."""
+    if not organization_id:
+        return []
+    key = _key_pending(organization_id)
+    raw = get_key(key)
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else raw
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def set_pending_support_list(organization_id: str, items: list, ex: int = DEFAULT_PENDING_TTL_SECONDS) -> list:
+    """Overwrite the pending support list for an org (best-effort)."""
+    if not organization_id:
+        return []
+    key = _key_pending(organization_id)
+    safe = items if isinstance(items, list) else []
+    try:
+        set_key(key, json.dumps(safe), ex=ex)
+    except Exception:
+        pass
+    return safe
+
+
 def get_staff_binding(staff_zalo_user_id: str):
     raw = get_key(_key_staff_binding(staff_zalo_user_id))
     if not raw:
@@ -92,22 +120,13 @@ def add_pending_support(organization_id: str, conv_id: str):
     if not organization_id or not conv_id:
         return None
     key = _key_pending(organization_id)
-    raw = get_key(key)
-    try:
-        items = json.loads(raw) if raw else []
-        if not isinstance(items, list):
-            items = []
-    except Exception:
-        items = []
+    items = get_pending_support_list(organization_id)
 
     # de-dup while preserving order
     conv_id_str = str(conv_id)
     items = [x for x in items if str(x) != conv_id_str]
     items.append(conv_id_str)
-    try:
-        set_key(key, json.dumps(items), ex=DEFAULT_PENDING_TTL_SECONDS)
-    except Exception:
-        pass
+    set_pending_support_list(organization_id, items, ex=DEFAULT_PENDING_TTL_SECONDS)
     return items
 
 
@@ -115,20 +134,12 @@ def pop_pending_support(organization_id: str):
     """Pop the oldest pending conv_id for the org. Returns conv_id or None."""
     if not organization_id:
         return None
-    key = _key_pending(organization_id)
-    raw = get_key(key)
-    try:
-        items = json.loads(raw) if raw else []
-        if not isinstance(items, list) or not items:
-            return None
-    except Exception:
+    items = get_pending_support_list(organization_id)
+    if not items:
         return None
 
     conv_id = items.pop(0)
-    try:
-        set_key(key, json.dumps(items), ex=DEFAULT_PENDING_TTL_SECONDS)
-    except Exception:
-        pass
+    set_pending_support_list(organization_id, items, ex=DEFAULT_PENDING_TTL_SECONDS)
     return conv_id
 
 
@@ -136,21 +147,11 @@ def remove_pending_support(organization_id: str, conv_id: str):
     """Remove a specific conv_id from the pending list for the org. Returns updated list or None."""
     if not organization_id or not conv_id:
         return None
-    key = _key_pending(organization_id)
-    raw = get_key(key)
-    try:
-        items = json.loads(raw) if raw else []
-        if not isinstance(items, list):
-            items = []
-    except Exception:
-        items = []
+    items = get_pending_support_list(organization_id)
 
     # Remove the specific conv_id
     conv_id_str = str(conv_id)
     items = [x for x in items if str(x) != conv_id_str]
-    try:
-        set_key(key, json.dumps(items), ex=DEFAULT_PENDING_TTL_SECONDS)
-    except Exception:
-        pass
+    set_pending_support_list(organization_id, items, ex=DEFAULT_PENDING_TTL_SECONDS)
     return items
 

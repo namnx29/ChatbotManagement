@@ -1456,6 +1456,15 @@ def send_conversation_message(conv_id):
                 pass
         except Exception as e:
             logger.error(f"Failed to emit socket event for outgoing message: {e}")
+
+        # If this conversation was waiting in support queue, mark as handled when staff replies on web
+        try:
+            from utils.support_workflow import remove_pending_support
+            org_for_pending = integration.get('organizationId') or user_org_id
+            if org_for_pending:
+                remove_pending_support(str(org_for_pending), str(conv_id))
+        except Exception:
+            pass
         return jsonify({'success': True, 'data': {'sent': sent_doc, 'send_response': send_resp}}), 200
     except Exception as e:
         logger.error(f"Failed to send conversation message: {e}", exc_info=True)
@@ -1510,6 +1519,15 @@ def set_conversation_bot_reply(conv_id):
             return jsonify({'success': False, 'message': 'Conversation not found'}), 404
 
         updated = conversation_model.set_bot_reply_by_id(conv.get('_id'), enabled_bool, account_id=integration.get('accountId'), organization_id=integration.get('organizationId'))
+        # If transferring back to chatbot, clear from pending support queue
+        if enabled_bool:
+            try:
+                from utils.support_workflow import remove_pending_support
+                org_for_pending = integration.get('organizationId') or user_org_id
+                if org_for_pending:
+                    remove_pending_support(str(org_for_pending), str(conv_id))
+            except Exception:
+                pass
         # Emit update so other clients (account owner and org members) get realtime state
         try:
             # Refresh conversation to ensure we get latest tags

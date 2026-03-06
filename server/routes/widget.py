@@ -586,6 +586,13 @@ def send_conversation_message(conv_id):
                 account_id=account_id,
                 sender_profile=sender_profile,
             )
+
+            # If this conversation was waiting in support queue, mark as handled when staff replies on web
+            try:
+                from utils.support_workflow import remove_pending_support
+                remove_pending_support(str(org_id), str(conv_id))
+            except Exception:
+                pass
         else:
             # WIDGET / CUSTOMER flow: customer is sending message to staff
             # 2. Find or create conversation scoped to organization
@@ -802,6 +809,14 @@ def set_widget_conversation_bot_reply(conv_id):
             account_id=account_id,
             organization_id=user_org_id,
         )
+
+        # If transferring back to chatbot, clear from pending support queue
+        if enabled_bool:
+            try:
+                from utils.support_workflow import remove_pending_support
+                remove_pending_support(str(user_org_id), str(conv_id))
+            except Exception:
+                pass
 
         # Emit update so other clients (account owner and org members) get realtime state
         try:

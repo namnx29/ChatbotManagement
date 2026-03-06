@@ -198,6 +198,13 @@ def create_app(env=None):
             updated = conv_model.unlock_by_id(conv.get('_id'), requester_account_id=account_id, force=(user.get('role')=='admin'))
             if not updated:
                 return
+
+            # Ensure stale support queue item is cleared when web marks complete
+            try:
+                from utils.support_workflow import remove_pending_support
+                remove_pending_support(str(user_org), str(conv_id))
+            except Exception:
+                pass
             socketio = getattr(app, 'socketio', None)
             if socketio and user_org:
                 payload = {'conv_id': conv_id, 'conversation_id': updated.get('_id')}

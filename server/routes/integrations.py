@@ -548,6 +548,13 @@ def lock_conversation(conv_id):
         if not updated:
             return jsonify({'success': False, 'message': 'Failed to lock conversation'}), 500
 
+        # If this conversation was in support pending queue, mark it as handled (web accepted)
+        try:
+            from utils.support_workflow import remove_pending_support
+            remove_pending_support(str(user_org_id), str(conv_id))
+        except Exception:
+            pass
+
         # Notify org members via socket
         try:
             socketio = getattr(current_app, 'socketio', None)

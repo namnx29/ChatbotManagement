@@ -135,11 +135,42 @@ export function NotificationProvider({ children }) {
       }
     };
 
+    const handleSupportNeeded = (payload) => {
+      try {
+        const customerName = payload?.customer_name || 'Khách hàng';
+        const text = payload?.text || `Khách hàng ${customerName} cần hỗ trợ`;
+
+        // Always make an in-app event available for any page
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('support-needed', { detail: payload }));
+        }
+
+        // Audible cue for staff/admin
+        playNotificationSound();
+
+        // Browser notification only when tab is hidden
+        if (Notification.permission === 'granted' && document.hidden) {
+          const n = new Notification('Yêu cầu hỗ trợ', {
+            body: text,
+            icon: '/logo.png',
+          });
+          n.onclick = () => {
+            window.focus();
+            n.close();
+          };
+        }
+      } catch (e) {
+        console.log('support-needed handler error:', e);
+      }
+    };
+
     socket.on('new-message', handleNewMessage);
+    socket.on('support-needed', handleSupportNeeded);
 
     return () => {
       if (socket) {
         socket.off('new-message', handleNewMessage);
+        socket.off('support-needed', handleSupportNeeded);
         socket.disconnect();
       }
     };

@@ -3,14 +3,76 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _build_pending_message(mongo_client, conv_id, index):
+def _get_conversation_for_pending(mongo_client, organization_id, conv_id):
+    """Resolve a Conversation doc from a pending conv_id string."""
+    from models.conversation import ConversationModel
+
+    conv_model = ConversationModel(mongo_client)
+
+    parts = str(conv_id).split(':')
+    if len(parts) < 3:
+        return None
+
+    platform = parts[0].strip().lower()
+    oa_id = parts[1]
+    customer_id_full = ':'.join(parts[2:])  # rejoin in case customer_id also has ':'
+    customer_id = f"{platform}:{customer_id_full}"
+
+    try:
+        return conv_model.find_by_oa_and_customer(oa_id, customer_id, organization_id=organization_id, account_id=None)
+    except TypeError:
+        # Backward compat if signature differs in older code paths
+        return conv_model.find_by_oa_and_customer(oa_id, customer_id)
+
+
+def cleanup_pending_support_list(mongo_client, organization_id):
+    """Remove stale/handled items from the org pending list (best-effort)."""
+    if not mongo_client or not organization_id:
+        return []
+    try:
+        from utils.support_workflow import get_pending_support_list, set_pending_support_list
+
+        items = get_pending_support_list(organization_id) or []
+        if not items:
+            return []
+
+        cleaned = []
+        seen = set()
+
+        for raw in items:
+            conv_id = str(raw)
+            if conv_id in seen:
+                continue
+            seen.add(conv_id)
+
+            conv = _get_conversation_for_pending(mongo_client, organization_id, conv_id)
+            if not conv:
+                continue
+
+            # still pending if: no handler AND bot is disabled (or explicitly bot-failed)
+            handler = conv.get('current_handler')
+            if handler:
+                continue
+
+            tags = (conv.get('tags') or '').strip().lower()
+            bot_flag = conv.get('bot_reply') if 'bot_reply' in conv else conv.get('bot-reply')
+            if tags == 'bot-failed' or (bot_flag is False):
+                cleaned.append(conv_id)
+
+        # Keep order, limit, and persist
+        cleaned = cleaned[:1000]
+        set_pending_support_list(organization_id, cleaned)
+        return cleaned
+    except Exception as e:
+        logger.debug(f"cleanup_pending_support_list failed: {e}")
+        return []
+
+
+def _build_pending_message(mongo_client, organization_id, conv_id, index):
     """Build a formatted message for a single pending request with platform, customer name, and last message.
     Returns a formatted string or None if conversation not found.
     """
     try:
-        from models.conversation import ConversationModel
-        conv_model = ConversationModel(mongo_client)
-        
         # Parse conv_id format: "platform:oa_id:customer_id"
         parts = str(conv_id).split(':')
         if len(parts) < 3:
@@ -21,8 +83,8 @@ def _build_pending_message(mongo_client, conv_id, index):
         oa_id = parts[1]
         customer_id_full = ':'.join(parts[2:])  # rejoin in case customer_id also has ':'
         customer_id = f"{platform}:{customer_id_full}"
-        
-        conv = conv_model.find_by_oa_and_customer(oa_id, customer_id)
+
+        conv = _get_conversation_for_pending(mongo_client, organization_id, conv_id)
         if not conv:
             return None
         
@@ -85,12 +147,19 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
     if not mongo_client or not organization_id or not conv_id:
         return {'success': False, 'sent': 0, 'skipped_busy': 0, 'skipped_no_zalo': 0, 'skipped_no_staff': 0}
 
+    # Fallback: get socketio from Flask app when not passed (e.g. called from request context)
+    if socketio is None:
+        try:
+            from flask import current_app
+            socketio = getattr(current_app, 'socketio', None)
+        except Exception:
+            pass
+
     try:
         from models.user import UserModel
         from models.integration import IntegrationModel
-        from utils.support_workflow import is_staff_busy, get_key, _key_pending
+        from utils.support_workflow import is_staff_busy
         from routes.zalo import _send_message_to_zalo
-        import json
 
         user_model = UserModel(mongo_client)
         integration_model = IntegrationModel(mongo_client)
@@ -99,37 +168,34 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
         zalo_integration = integration_model.find_by_organization_id('zalo', organization_id)
         access_token = (zalo_integration or {}).get('access_token')
 
-        users = user_model.find_by_organization_id(organization_id) or []
-        staff_users = [u for u in users if u.get('role') == 'staff' and bool(u.get('is_active', True))]
-        if not staff_users:
-            return {'success': True, 'sent': 0, 'skipped_busy': 0, 'skipped_no_zalo': 0, 'skipped_no_staff': 1}
-
-        # Fetch all pending requests from Redis
-        pending_key = _key_pending(organization_id)
-        raw_pending = get_key(pending_key)
-        pending_list = []
-        if raw_pending:
-            try:
-                pending_list = json.loads(raw_pending) if isinstance(raw_pending, str) else raw_pending
-                if not isinstance(pending_list, list):
-                    pending_list = []
-            except Exception:
-                pending_list = []
-        
-        # Deduplicate pending list while preserving order
-        seen = set()
-        deduped_list = []
-        for item in pending_list:
-            item_str = str(item)
-            if item_str not in seen:
-                seen.add(item_str)
-                deduped_list.append(item)
-        pending_list = deduped_list[:10]  # Limit to first 10 items
+        # Fetch + clean pending list (avoid stale items after web handled)
+        pending_list = cleanup_pending_support_list(mongo_client, organization_id)[:10]
         pending_count = len(pending_list)
 
         sent = 0
         skipped_busy = 0
         skipped_no_zalo = 0
+
+        # Web notify: broadcast to org room so all staff/admin see it
+        try:
+            if socketio and organization_id:
+                msg_name = customer_name or "Khách hàng"
+                socketio.emit('support-needed', {
+                    'conv_id': conv_id,
+                    'platform': platform,
+                    'customer_name': customer_name,
+                    'content': content,
+                    'pending_count': pending_count,
+                    'organization_id': str(organization_id),
+                    'text': f"Khách hàng {msg_name} cần hỗ trợ",
+                }, room=f"organization:{str(organization_id)}")
+        except Exception:
+            pass
+
+        users = user_model.find_by_organization_id(organization_id) or []
+        staff_users = [u for u in users if u.get('role') == 'staff' and bool(u.get('is_active', True))]
+        if not staff_users:
+            return {'success': True, 'sent': 0, 'skipped_busy': 0, 'skipped_no_zalo': 0, 'skipped_no_staff': 1, 'pending_count': pending_count}
 
         for su in staff_users:
             staff_account_id = su.get('accountId')
@@ -145,7 +211,7 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
             try:
                 # Send formatted messages for each pending item
                 for idx, pending_conv_id in enumerate(pending_list, 1):
-                    msg = _build_pending_message(mongo_client, pending_conv_id, idx)
+                    msg = _build_pending_message(mongo_client, organization_id, pending_conv_id, idx)
                     if msg:
                         _send_message_to_zalo(access_token, str(staff_zalo_user_id), message_text=msg)
                 
@@ -164,6 +230,7 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
                         'content': content,
                         'pending_count': pending_count,
                         'organization_id': str(organization_id),
+                        'text': f"Khách hàng {(customer_name or 'Khách hàng')} cần hỗ trợ",
                     }, room=f"account:{str(staff_account_id)}")
             except Exception:
                 pass
@@ -284,7 +351,6 @@ def send_pending_list_to_staff(mongo_client, staff_account_id, organization_id, 
 
     try:
         from models.user import UserModel
-        from utils.support_workflow import get_key, _key_pending
         from routes.zalo import _send_message_to_zalo
 
         user_model = UserModel(mongo_client)
@@ -296,18 +362,8 @@ def send_pending_list_to_staff(mongo_client, staff_account_id, organization_id, 
 
         staff_zalo_id = staff_user.get('zalo_user_id')
 
-        # Fetch pending requests from Redis
-        pending_key = _key_pending(organization_id)
-        raw_pending = get_key(pending_key)
-        pending_list = []
-        if raw_pending:
-            try:
-                import json
-                pending_list = json.loads(raw_pending) if isinstance(raw_pending, str) else raw_pending
-                if not isinstance(pending_list, list):
-                    pending_list = []
-            except Exception:
-                pending_list = []
+        # Fetch + clean pending list (avoid stale items after web handled)
+        pending_list = cleanup_pending_support_list(mongo_client, organization_id)
 
         if not pending_list:
             # No pending requests
@@ -319,7 +375,7 @@ def send_pending_list_to_staff(mongo_client, staff_account_id, organization_id, 
         # Send formatted messages for each pending item (max 10)
         try:
             for idx, conv_id in enumerate(pending_list[:10], 1):
-                msg = _build_pending_message(mongo_client, conv_id, idx)
+                msg = _build_pending_message(mongo_client, organization_id, conv_id, idx)
                 if msg:
                     _send_message_to_zalo(access_token, str(staff_zalo_id), message_text=msg)
             

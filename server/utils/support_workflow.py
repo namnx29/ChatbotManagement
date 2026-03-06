@@ -63,6 +63,14 @@ def is_staff_busy(organization_id: str, staff_account_id: str) -> bool:
         return False
 
 
+def get_staff_busy_conv_id(organization_id: str, staff_account_id: str):
+    """Return the conversation id the staff is currently marked as busy with, or None."""
+    try:
+        return get_key(_key_staff_busy(organization_id, staff_account_id))
+    except Exception:
+        return None
+
+
 def mark_staff_busy(organization_id: str, staff_account_id: str, conv_id: str, ex: int = DEFAULT_BUSY_TTL_SECONDS):
     try:
         set_key(_key_staff_busy(organization_id, staff_account_id), str(conv_id), ex=ex)

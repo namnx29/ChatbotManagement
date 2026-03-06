@@ -32,7 +32,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { getAvatarUrl, fetchProfile } from "@/lib/api";
+import { getAvatarUrl, fetchProfile, listAllConversations } from "@/lib/api";
 import TrialBanner from "@/lib/components/popup/TrialBanner";
 import { NotificationProvider, useNotification } from "@/lib/context/NotificationContext";
 
@@ -74,7 +74,7 @@ function DashboardLayoutContent({ children }) {
       if (storedUserRole === "staff") {
         const allowedStaffRoutes = ["/dashboard/messages", "/dashboard/profile"];
         const isAllowedRoute = allowedStaffRoutes.some(route => pathname.startsWith(route));
-        
+
         if (!isAllowedRoute) {
           // Redirect staff to messages page
           router.push("/dashboard/messages");
@@ -151,18 +151,9 @@ function DashboardLayoutContent({ children }) {
       if (!accountId) return;
 
       try {
-        const response = await fetch("/api/integrations/conversations/all", {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Account-Id": accountId,
-          },
-        });
-        if (response.ok) {
-          const result = await response.json();
-          if (result.stats) {
-            setSidebarStats(result.stats);
-          }
+        const response = await listAllConversations(accountId);
+        if (response.success && response.stats) {
+          setSidebarStats(response.stats);
         }
       } catch (error) {
         console.log("Failed to fetch message stats for sidebar");
@@ -248,28 +239,28 @@ function DashboardLayoutContent({ children }) {
       icon: <TeamOutlined />,
       label: "Quản lý tài khoản",
     },
-    {
-      key: "/dashboard/statistics",
-      icon: <LineChartOutlined />,
-      label: "Thống kê",
-    },
-    { key: "/dashboard/posts", icon: <FileTextOutlined />, label: "Bài viết" },
-    {
-      key: "/dashboard/history",
-      icon: <HistoryOutlined />,
-      label: "Lịch sử giao dịch",
-    },
-    { key: "/dashboard/affiliate", icon: <ShareAltOutlined />, label: "Affiliate" },
-    {
-      key: "/dashboard/support",
-      icon: <QuestionCircleOutlined />,
-      label: "Hỗ trợ yêu cầu ticket",
-    },
-    {
-      key: "/dashboard/upgrade",
-      icon: <ThunderboltOutlined />,
-      label: "Nâng cấp",
-    },
+    // {
+    //   key: "/dashboard/statistics",
+    //   icon: <LineChartOutlined />,
+    //   label: "Thống kê",
+    // },
+    // { key: "/dashboard/posts", icon: <FileTextOutlined />, label: "Bài viết" },
+    // {
+    //   key: "/dashboard/history",
+    //   icon: <HistoryOutlined />,
+    //   label: "Lịch sử giao dịch",
+    // },
+    // { key: "/dashboard/affiliate", icon: <ShareAltOutlined />, label: "Affiliate" },
+    // {
+    //   key: "/dashboard/support",
+    //   icon: <QuestionCircleOutlined />,
+    //   label: "Hỗ trợ yêu cầu ticket",
+    // },
+    // {
+    //   key: "/dashboard/upgrade",
+    //   icon: <ThunderboltOutlined />,
+    //   label: "Nâng cấp",
+    // },
   ];
 
   const getSelectedMenuKey = () => {
@@ -318,12 +309,12 @@ function DashboardLayoutContent({ children }) {
       ...item,
       label: <Link href={item.key}>{item.label}</Link>,
     })),
-    {
-      key: "settings-dropdown",
-      icon: <SettingOutlined />,
-      label: "Cài đặt",
-      children: settingsMenuItems,
-    },
+    // {
+    //   key: "settings-dropdown",
+    //   icon: <SettingOutlined />,
+    //   label: "Cài đặt",
+    //   children: settingsMenuItems,
+    // },
   ];
 
   // Filter menu items based on user role
@@ -429,9 +420,9 @@ function DashboardLayoutContent({ children }) {
                 minWidth: "300px",
               }}
               items={[
-                { key: "home", label: "Trang chủ", color: "white" },
-                { key: "guide", label: "Hướng dẫn" },
-                { key: "packages", label: "Mua gói" },
+                // { key: "home", label: "Trang chủ", color: "white" },
+                // { key: "guide", label: "Hướng dẫn" },
+                // { key: "packages", label: "Mua gói" },
               ]}
               selectedKeys={[]}
             />

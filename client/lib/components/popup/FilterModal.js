@@ -182,7 +182,7 @@ export default function FilterModal({ open, onClose }) {
 						</div>
 
 						{/* Trạng thái hội thoại */}
-						<div
+						{/* <div
 							style={{
 								borderBottom: '1px solid #f0f0f0',
 							}}
@@ -240,7 +240,7 @@ export default function FilterModal({ open, onClose }) {
 									</Checkbox.Group>
 								</div>
 							)}
-						</div>
+						</div> */}
 
 						{/* Trạng thái trả lời */}
 						<div

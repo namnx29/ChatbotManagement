@@ -750,7 +750,7 @@ def webhook_event():
     if is_staff_sender and sender_id != oa_id:
         try:
             from models.message import MessageModel
-            from utils.support_workflow import get_staff_binding, set_staff_binding, clear_staff_binding, mark_staff_busy, clear_staff_busy, pop_pending_support
+            from utils.support_workflow import get_staff_binding, set_staff_binding, clear_staff_binding, get_staff_busy_conv_id, mark_staff_busy, clear_staff_busy, pop_pending_support
             # user_model and staff_user have been initialized above
             staff_account_id = staff_user.get('accountId') if staff_user else None
             staff_name = (staff_user.get('name') or staff_user.get('username')) if staff_user else 'Nhân viên'
@@ -763,6 +763,26 @@ def webhook_event():
 
             # Accept command: "/accept<number>" (e.g. /accept1, /accept2), "/accept <conv_id>", or "/accept" to take first pending
             if text_raw.lower().startswith('/accept'):
+                # If staff already has an active binding session, do not allow a new accept until they end it
+                if binding and binding.get('conv_id'):
+                    _send_message_to_zalo(
+                        integration.get('access_token'),
+                        customer_platform_id,
+                        message_text="Bạn đang trong phiên hỗ trợ. Vui lòng kết thúc bằng /chatbot trước khi tiếp nhận yêu cầu mới."
+                    )
+                    return jsonify({'success': True}), 200
+
+                # Prevent accepting a new request while already handling one (based on busy flag)
+                if org_id and staff_account_id:
+                    busy_conv_id = get_staff_busy_conv_id(org_id, staff_account_id)
+                    if busy_conv_id and (not binding or binding.get('conv_id') != busy_conv_id):
+                        _send_message_to_zalo(
+                            integration.get('access_token'),
+                            customer_platform_id,
+                            message_text="Bạn đang hỗ trợ yêu cầu khác. Vui lòng kết thúc bằng /chatbot trước khi tiếp nhận yêu cầu mới."
+                        )
+                        return jsonify({'success': True}), 200
+
                 # Parse the command: could be /accept, /accept1, /accept2, or /accept <conv_id>
                 cmd_match = text_raw[7:].strip()  # Extract everything after "/accept"
                 target_conv_id = None

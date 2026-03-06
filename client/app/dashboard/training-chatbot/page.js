@@ -176,7 +176,7 @@ export default function ChatbotPage() {
         border: "1px solid #f0f0f0",
       }}
       onClick={() =>
-        router.push(`/dashboard/training-chatbot/${bot.id}/overview`)
+        router.push(`/dashboard/training-chatbot/${bot.id}/data-training`)
       }
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: "16px" }}>
@@ -195,7 +195,7 @@ export default function ChatbotPage() {
             <Space size={12}>
               <SettingOutlined
                 onClick={() =>
-                  router.push(`/dashboard/training-chatbot/${bot.id}/overview`)
+                  router.push(`/dashboard/training-chatbot/${bot.id}/data-training`)
                 }
                 style={{ fontSize: "16px", color: "#666", cursor: "pointer" }}
               />
@@ -247,7 +247,7 @@ export default function ChatbotPage() {
         marginBottom: "12px",
       }}
       onClick={() =>
-        router.push(`/dashboard/training-chatbot/${bot.id}/overview`)
+        router.push(`/dashboard/training-chatbot/${bot.id}/data-training`)
       }
     >
       <div
@@ -297,7 +297,7 @@ export default function ChatbotPage() {
           <Space size={16}>
             <SettingOutlined
               onClick={() =>
-                router.push(`/dashboard/training-chatbot/${bot.id}/overview`)
+                router.push(`/dashboard/training-chatbot/${bot.id}/data-training`)
               }
               style={{ fontSize: "18px", color: "#666", cursor: "pointer" }}
             />
@@ -467,7 +467,7 @@ export default function ChatbotPage() {
               key={bot.id}
               bot={bot}
               onOpen={(id) =>
-                router.push(`/dashboard/training-chatbot/${id}/overview`)
+                router.push(`/dashboard/training-chatbot/${id}/data-training`)
               }
               onDelete={handleDelete}
             />

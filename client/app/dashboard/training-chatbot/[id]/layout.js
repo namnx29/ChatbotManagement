@@ -42,68 +42,68 @@ const trainingMenuItems = [
         label: "Tích hợp nền tảng",
         path: "platform-intergrate",
       },
-      {
-        key: "test-bot",
-        icon: <RobotOutlined />,
-        label: "Test bot",
-        path: "test-bot",
-      },
+      // {
+      //   key: "test-bot",
+      //   icon: <RobotOutlined />,
+      //   label: "Test bot",
+      //   path: "test-bot",
+      // },
     ],
   },
-  {
-    key: "advanced-settings",
-    label: "Cài đặt nâng cao",
-    type: "group",
-    children: [
-      {
-        key: "overview",
-        icon: <AppstoreFilled />,
-        label: "Tổng quan",
-        path: "overview",
-      },
-      {
-        key: "sales-script",
-        icon: <ThunderboltOutlined />,
-        label: "Kịch bản chốt sale",
-        path: "sales-script",
-      },
-      {
-        key: "media",
-        icon: <PictureOutlined />,
-        label: "Thư viện ảnh",
-        path: "media",
-      },
-      {
-        key: "quick-reply",
-        icon: <CommentOutlined />,
-        label: "Tin nhắn nhanh",
-        path: "quick-reply",
-      },
-      {
-        key: "tags",
-        icon: <TagOutlined />,
-        label: "Quản lý tags",
-        path: "tags",
-      },
-      {
-        key: "edit-history",
-        icon: <HistoryOutlined />,
-        label: "Lịch sử chỉnh sửa",
-        path: "edit-history",
-      },
-    ],
-  },
+  // {
+  //   key: "advanced-settings",
+  //   label: "Cài đặt nâng cao",
+  //   type: "group",
+  //   children: [
+  //     {
+  //       key: "overview",
+  //       icon: <AppstoreFilled />,
+  //       label: "Tổng quan",
+  //       path: "overview",
+  //     },
+  //     {
+  //       key: "sales-script",
+  //       icon: <ThunderboltOutlined />,
+  //       label: "Kịch bản chốt sale",
+  //       path: "sales-script",
+  //     },
+  //     {
+  //       key: "media",
+  //       icon: <PictureOutlined />,
+  //       label: "Thư viện ảnh",
+  //       path: "media",
+  //     },
+  //     {
+  //       key: "quick-reply",
+  //       icon: <CommentOutlined />,
+  //       label: "Tin nhắn nhanh",
+  //       path: "quick-reply",
+  //     },
+  //     {
+  //       key: "tags",
+  //       icon: <TagOutlined />,
+  //       label: "Quản lý tags",
+  //       path: "tags",
+  //     },
+  //     {
+  //       key: "edit-history",
+  //       icon: <HistoryOutlined />,
+  //       label: "Lịch sử chỉnh sửa",
+  //       path: "edit-history",
+  //     },
+  //   ],
+  // },
   {
     key: "development",
     label: "Development",
     type: "group",
     children: [
-      {
-        key: "facebook-ads",
-        icon: <FacebookFilled />,
-        label: "Tool Ads Facebook",
-        path: "facebook-ads",
-      },
+      // {
+      //   key: "facebook-ads",
+      //   icon: <FacebookFilled />,
+      //   label: "Tool Ads Facebook",
+      //   path: "facebook-ads",
+      // },
       {
         key: "website",
         icon: <GlobalOutlined />,

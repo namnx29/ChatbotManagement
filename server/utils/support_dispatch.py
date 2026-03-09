@@ -248,13 +248,16 @@ def dispatch_support_needed(mongo_client, organization_id, conv_id, customer_nam
         return {'success': False, 'sent': 0, 'skipped_busy': 0, 'skipped_no_zalo': 0, 'skipped_no_staff': 0}
 
 
-def forward_customer_message_to_staff(mongo_client, conversation_id, message_text, oa_id):
+def forward_customer_message_to_staff(mongo_client, conversation_id, message_text=None, oa_id=None, image_url=None):
     """
     If a conversation has an active staff handler, forward incoming customer message to them.
     Called when a customer message arrives for a conversation with a staff member assigned.
     """
-    if not mongo_client or not conversation_id or not message_text:
-        logger.info(f"forward_customer_message_to_staff invoked: conv_id={conversation_id}, msg_len={len(message_text) if message_text else 0}")
+    if not mongo_client or not conversation_id or (not message_text and not image_url):
+        logger.info(
+            "forward_customer_message_to_staff invoked: "
+            f"conv_id={conversation_id}, msg_len={len(message_text) if message_text else 0}, has_image={bool(image_url)}"
+        )
         return {'success': False, 'reason': 'missing_args'}
 
     try:
@@ -325,13 +328,22 @@ def forward_customer_message_to_staff(mongo_client, conversation_id, message_tex
         if not access_token:
             return {'success': False, 'reason': 'no_access_token'}
 
-        # Send the customer message to staff's personal Zalo
+        # Send the customer message to staff's personal Zalo (text and/or image)
         try:
             customer_name = (conv_doc.get('customer_info') or {}).get('name') or 'Khách hàng'
-            message_to_staff = f"[{customer_name}]: {message_text}"
-            logger.debug(f"Forwarding to staff {staff_zalo_id}: {message_to_staff[:100]}")
-            _send_message_to_zalo(access_token, str(staff_zalo_id), message_text=message_to_staff)
-            logger.info(f"Successfully forwarded customer message to staff {staff_zalo_id}")
+            header = f"[{customer_name}]: "
+            
+            # 1. Gửi thông báo văn bản trước (hoặc nội dung chat)
+            msg_body = message_text if message_text else "📷 Đã gửi một hình ảnh"
+            _send_message_to_zalo(access_token, str(staff_zalo_id), message_text=f"{header}{msg_body}")
+            
+            # 2. Nếu có ảnh, gửi thêm một tin nhắn ảnh riêng biệt
+            if image_url:
+                # Lưu ý: Hàm _send_message_to_zalo của bạn CẦN xử lý việc 
+                # upload image_url lên Zalo để lấy attachment_id rồi mới gửi được media template.
+                _send_message_to_zalo(access_token, str(staff_zalo_id), image_url=image_url)
+                
+            logger.info(f"Successfully forwarded customer message/image to staff {staff_zalo_id}")
             return {'success': True, 'staff_zalo_id': staff_zalo_id}
         except Exception as e:
             logger.error(f"Failed to forward message to staff {staff_zalo_id}: {e}", exc_info=True)

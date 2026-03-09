@@ -674,6 +674,52 @@ def webhook_event():
     except Exception:
         message_obj = None
 
+    # Try to extract an image URL from the Zalo webhook message payload
+    image_url = None
+    try:
+        obj = message_obj or {}
+
+        # Common Zalo payload shapes put media under "attachments" or "attachment"
+        attachments = []
+        if isinstance(obj.get('attachments'), list):
+            attachments = obj.get('attachments') or []
+        elif isinstance(obj.get('attachment'), dict):
+            attachments = [obj.get('attachment')]
+        elif isinstance(obj.get('attachment'), list):
+            attachments = obj.get('attachment') or []
+
+        for att in attachments:
+            if not isinstance(att, dict):
+                continue
+            payload = att.get('payload') or {}
+            candidate_urls = []
+
+            if isinstance(payload, dict):
+                # Direct image URL
+                direct_url = payload.get('url') or payload.get('href') or payload.get('thumbnail')
+                if direct_url:
+                    candidate_urls.append(direct_url)
+
+                # Template/media style: payload.elements[].media / media_content
+                elements = payload.get('elements') or []
+                for el in elements:
+                    if not isinstance(el, dict):
+                        continue
+                    media = el.get('media') or el.get('media_content') or {}
+                    if isinstance(media, dict):
+                        candidate_urls.append(
+                            media.get('url') or media.get('src') or media.get('thumbnail')
+                        )
+
+            for u in candidate_urls:
+                if u:
+                    image_url = u
+                    break
+            if image_url:
+                break
+    except Exception:
+        image_url = None
+
     # Look up integration by oa_id (support fallbacks where oa_id may be stored in meta.profile)
     integration_model = IntegrationModel(current_app.mongo_client)
     integration = None
@@ -1129,10 +1175,10 @@ def webhook_event():
             target_platform, target_oa_id, target_sender_id = p
             target_platform = str(target_platform or '').strip().lower()
             target_customer_id = f"{target_platform}:{target_sender_id}"
-
+            
             # Forward to customer on the original platform (bridge)
-            if not message:
-                logger.warning(f"Staff message has no content, skipping forward: staff={customer_platform_id}")
+            if not (message or image_url):
+                logger.warning(f"Staff message has no content (no text/image), skipping forward: staff={customer_platform_id}")
             try:
                 # platform send
                 send_resp = None
@@ -1145,7 +1191,12 @@ def webhook_event():
                         _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không tìm thấy kết nối Facebook/Instagram để gửi tin.")
                         return jsonify({'success': True}), 200
                     owner_account_id = plat_integration.get('accountId')
-                    send_resp = _send_message_to_facebook(plat_integration.get('access_token'), target_sender_id, message_text=message)
+                    send_resp = _send_message_to_facebook(
+                        plat_integration.get('access_token'),
+                        target_sender_id,
+                        message_text=message,
+                        image_data=image_url,
+                    )
                 elif target_platform == 'zalo':
                     im = IntegrationModel(current_app.mongo_client)
                     zalo_int = im.find_by_platform_and_oa('zalo', target_oa_id)
@@ -1153,7 +1204,12 @@ def webhook_event():
                         _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Không tìm thấy kết nối Zalo OA để gửi tin.")
                         return jsonify({'success': True}), 200
                     owner_account_id = zalo_int.get('accountId')
-                    send_resp = _send_message_to_zalo(zalo_int.get('access_token'), target_sender_id, message_text=message)
+                    send_resp = _send_message_to_zalo(
+                        zalo_int.get('access_token'),
+                        target_sender_id,
+                        message_text=message,
+                        image_url=image_url,
+                    )
                 elif target_platform == 'widget':
                     # no external send needed; dashboard/widget will update via socket below
                     send_resp = {'status': 'widget'}
@@ -1161,21 +1217,57 @@ def webhook_event():
                     _send_message_to_zalo(integration.get('access_token'), customer_platform_id, message_text="Nền tảng chưa hỗ trợ bridge.")
                     return jsonify({'success': True}), 200
 
+                # For Facebook/Instagram, rely on their own webhook echoes to persist messages
+                # and update the dashboard, to avoid duplicate records and mismatched metadata.
+                if target_platform in ('facebook', 'instagram'):
+                    return jsonify({'success': True}), 200
+
                 # Persist as outgoing message on the real customer conversation so dashboard updates
                 from models.conversation import ConversationModel
                 conv_model = ConversationModel(current_app.mongo_client)
-                conv_doc = conv_model.find_by_oa_and_customer(target_oa_id, target_customer_id, organization_id=org_id, account_id=None)
+                conv_doc = conv_model.find_by_oa_and_customer(
+                    target_oa_id,
+                    target_customer_id,
+                    organization_id=org_id,
+                    account_id=None,
+                )
                 conv_db_id = conv_doc.get('_id') if conv_doc else None
                 mm = MessageModel(current_app.mongo_client)
 
-                sender_id_for_store = (staff_account_id if target_platform == 'widget' else target_sender_id)
+                sender_id_for_store = (
+                    staff_account_id if target_platform == 'widget' else target_sender_id
+                )
+
+                # Align metadata/shape with native platform handlers so frontends can render images
+                if target_platform == 'widget':
+                    # Match widget staff message structure
+                    metadata = {
+                        'source': 'staff',
+                        'type': 'widget',
+                        'staff_name': staff_name,
+                        'from_staff_zalo_user_id': str(customer_platform_id),
+                        'send_response': send_resp,
+                    }
+                    if image_url:
+                        metadata['image'] = image_url
+                else:
+                    metadata = {
+                        'bridge': True,
+                        'from_staff_zalo_user_id': str(customer_platform_id),
+                        'send_response': send_resp,
+                    }
+                    if image_url:
+                        metadata['image_url'] = image_url
+
+                display_text = message or ("Tệp đính kèm" if image_url else None)
+
                 sent_doc = mm.add_message(
                     platform=target_platform,
                     oa_id=target_oa_id,
                     sender_id=sender_id_for_store,
                     direction='out',
-                    text=message,
-                    metadata={'bridge': True, 'from_staff_zalo_user_id': str(customer_platform_id), 'send_response': send_resp},
+                    text=display_text,
+                    metadata=metadata,
                     bot_reply=False,
                     tags='staff-interacting',
                     is_read=True,
@@ -1186,7 +1278,7 @@ def webhook_event():
                 conv_model.upsert_conversation(
                     oa_id=target_oa_id,
                     customer_id=target_customer_id,
-                    last_message_text=message or 'Tệp đính kèm',
+                    last_message_text=display_text,
                     last_message_created_at=datetime.utcnow(),
                     direction='out',
                     account_id=owner_account_id,
@@ -1194,28 +1286,41 @@ def webhook_event():
                 )
 
                 # Emit to org/account so everyone sees read-only updates
-                _emit_socket_to_account('new-message', {
-                    'platform': target_platform,
-                    'oa_id': target_oa_id,
-                    'sender_id': target_sender_id,
-                    'message': message,
-                    'message_doc': sent_doc,
-                    'bot_reply': False,
-                    'conv_id': str(target_conv_id),
-                    'conversation_id': conv_db_id,
-                    'sent_at': datetime.utcnow().isoformat() + 'Z',
-                    'direction': 'out',
-                }, owner_account_id, org_id)
+                _emit_socket_to_account(
+                    'new-message',
+                    {
+                        'platform': target_platform,
+                        'oa_id': target_oa_id,
+                        'sender_id': target_sender_id,
+                        'message': message,
+                        'message_doc': sent_doc,
+                        'bot_reply': False,
+                        'conv_id': str(target_conv_id),
+                        'conversation_id': conv_db_id,
+                        'sent_at': datetime.utcnow().isoformat() + 'Z',
+                        'direction': 'out',
+                    },
+                    owner_account_id,
+                    org_id,
+                )
 
-                _emit_socket_to_account('update-conversation', {
-                    'conv_id': str(target_conv_id),
-                    'conversation_id': conv_db_id,
-                    'oa_id': target_oa_id,
-                    'customer_id': target_customer_id,
-                    'last_message': {'text': message, 'created_at': datetime.utcnow().isoformat() + 'Z'},
-                    'tags': (conv_doc.get('tags') if isinstance(conv_doc, dict) else None),
-                    'platform': target_platform
-                }, owner_account_id, org_id)
+                _emit_socket_to_account(
+                    'update-conversation',
+                    {
+                        'conv_id': str(target_conv_id),
+                        'conversation_id': conv_db_id,
+                        'oa_id': target_oa_id,
+                        'customer_id': target_customer_id,
+                        'last_message': {
+                            'text': message,
+                            'created_at': datetime.utcnow().isoformat() + 'Z',
+                        },
+                        'tags': (conv_doc.get('tags') if isinstance(conv_doc, dict) else None),
+                        'platform': target_platform,
+                    },
+                    owner_account_id,
+                    org_id,
+                )
             except Exception as e:
                 logger.error(f"Error forwarding staff message: {e}", exc_info=True)
 
@@ -1404,16 +1509,20 @@ def webhook_event():
         logger.error(f"Failed to persist Zalo message: {e}")
         message_doc = None
 
-    # Forward incoming customer messages to active staff handler (two-way bridge)
-    if direction == 'in' and message and not is_staff_sender and conversation_id:
+    # Forward incoming customer messages (text and/or image) to active staff handler (two-way bridge)
+    if direction == 'in' and (message or image_url) and not is_staff_sender and conversation_id:
         try:
             from utils.support_dispatch import forward_customer_message_to_staff
-            logger.info(f"Attempting to forward customer message: conv_id={conversation_id}, is_staff={is_staff_sender}, dir={direction}")
+            logger.info(
+                f"Attempting to forward customer message: conv_id={conversation_id}, "
+                f"is_staff={is_staff_sender}, dir={direction}, has_image={bool(image_url)}"
+            )
             result = forward_customer_message_to_staff(
                 current_app.mongo_client,
                 conversation_id,
                 message,
-                integration.get('oa_id')
+                integration.get('oa_id'),
+                image_url=image_url,
             )
             logger.info(f"Forward result: {result}")
         except Exception as e:

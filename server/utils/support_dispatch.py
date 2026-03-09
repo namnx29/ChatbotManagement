@@ -90,31 +90,49 @@ def _build_pending_message(mongo_client, organization_id, conv_id, index):
         
         # Extract relevant info
         customer_name = (conv.get('customer_info') or {}).get('name') or 'Khách hàng'
-        last_message = conv.get('last_message_text') or None
-        
-        # If last_message_text is empty, try to fetch the latest message from messages collection
+        last_message = None
+
+        # Always try to fetch the latest CUSTOMER message (direction='in') from the messages collection.
+        # This avoids using staff/bot replies and ensures we show the most recent customer content.
+        try:
+            from models.message import MessageModel
+
+            msg_model = MessageModel(mongo_client)
+            recent_msgs = msg_model.get_messages(
+                platform,
+                oa_id,
+                customer_id_full,
+                limit=50,
+                skip=0,
+                conversation_id=conv.get('_id'),
+                account_id=None,
+            )
+            if recent_msgs:
+                # recent_msgs is sorted from oldest -> newest (see MessageModel.get_messages),
+                # so iterate in reverse to find the newest customer message.
+                for msg in reversed(recent_msgs):
+                    if msg.get('direction') == 'in':
+                        preview = msg.get('text')
+                        if not preview:
+                            # Derive a short label for attachment-only messages
+                            meta = msg.get('metadata') or {}
+                            has_attachment = bool(
+                                meta.get('attachments')
+                                or meta.get('attachment')
+                                or meta.get('image')
+                                or meta.get('image_url')
+                            )
+                            if has_attachment:
+                                preview = 'Tệp đính kèm'
+                        last_message = preview or 'Không có tin nhắn'
+                        break
+        except Exception:
+            last_message = None
+
+        # Fallback: if no customer messages found, use conversation's last_message_text
         if not last_message:
-            try:
-                from models.message import MessageModel
-                msg_model = MessageModel(mongo_client)
-                # Get the latest CUSTOMER message (direction='in') from the conversation
-                # Get multiple messages and filter for customer messages
-                recent_msgs = msg_model.get_messages(
-                    platform, oa_id, customer_id_full, limit=10, skip=0,
-                    conversation_id=conv.get('_id'), account_id=None
-                )
-                if recent_msgs and len(recent_msgs) > 0:
-                    # Find the latest customer message (direction='in')
-                    for msg in recent_msgs:
-                        if msg.get('direction') == 'in':  # Only customer messages
-                            last_message = msg.get('text') or 'Không có tin nhắn'
-                            break
-                    # If no customer message found, fall back to any message
-                    if not last_message:
-                        last_message = recent_msgs[0].get('text') or 'Không có tin nhắn'
-            except Exception:
-                pass
-        
+            last_message = conv.get('last_message_text') or 'Không có tin nhắn'
+
         last_message = (last_message or 'Không có tin nhắn')[:150]
         
         # Map platform code to display name

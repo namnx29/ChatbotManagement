@@ -867,7 +867,17 @@ def webhook_event():
                 if direction == 'in' and not deduped:
                     try:
                         from utils.support_dispatch import forward_customer_message_to_staff
-                        result = forward_customer_message_to_staff(current_app.mongo_client, conversation_id, message_text, integration.get('oa_id'))
+                        forward_text = message_text or None
+                        forward_image = None
+
+                        attachments = msg_obj.get('attachments') or []
+                        if attachments:
+                            for att in attachments:
+                                if att.get('type') == 'image':
+                                    payload = att.get('payload') or {}
+                                    forward_image = payload.get('url')
+                                    break
+                        result = forward_customer_message_to_staff(current_app.mongo_client, conversation_id, forward_text, integration.get('oa_id'), image_url=forward_image)
                         logger.info(f'forward_customer_message_to_staff result: {result}')
                     except Exception as e:
                         logger.error(f'Failed to forward incoming Facebook message to staff: {e}')

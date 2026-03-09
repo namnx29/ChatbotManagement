@@ -670,11 +670,15 @@ def send_conversation_message(conv_id):
             try:
                 from utils.support_dispatch import forward_customer_message_to_staff
                 logger.info(f"Widget incoming msg, attempting forward: conv={conversation_id}")
+                # For image-only messages, forward the image to staff's Zalo (or at least notify).
+                forward_text = text or None
+                forward_image = image or None
                 result = forward_customer_message_to_staff(
                     current_app.mongo_client,
                     conversation_id,
-                    text or "",
-                    oa_id
+                    forward_text,
+                    oa_id,
+                    image_url=forward_image,
                 )
                 logger.info(f"Widget forward result: {result}")
             except Exception as e:

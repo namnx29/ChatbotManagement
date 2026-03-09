@@ -59,6 +59,13 @@ def init_chatbot_routes(mongo_client):
             integration_model = IntegrationModel(mongo_client)
 
             bots = chatbot_model.list_chatbots_by_account(account_id)
+            if len(bots) == 0:
+                from models.user import UserModel
+                user_model = UserModel(mongo_client)
+
+                user_data = user_model.find_by_account_id(account_id)
+
+                bots = chatbot_model.list_chatbots_by_organization(user_data.get('organizationId')) if user_data else []
             for bot in bots:
                 integrations = integration_model.find_by_account(account_id, chatbot_id=str(bot.get('id')))
                 

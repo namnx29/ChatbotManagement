@@ -244,6 +244,8 @@ class ConversationModel:
 
             # Compare and update if needed
             existing_tag = result.get('tags')
+            if existing_tag == 'bot-failed':
+                return self._serialize(result)  # preserve it as-is
             if desired_tag != existing_tag:
                 if desired_tag:
                     self.collection.update_one({'_id': result.get('_id')}, {'$set': {'tags': desired_tag, 'updated_at': now}})

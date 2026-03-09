@@ -53,13 +53,19 @@ def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_
                 conv_model = ConversationModel(mongo_client)
                 conv = conv_model.find_by_oa_and_customer(oa_id, f"zalo:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
                 if conv and conv.get('_id'):
+                    # conv is serialized, so _id is often a string; cast back to ObjectId for updates
+                    try:
+                        from bson.objectid import ObjectId
+                        conv_obj_id = ObjectId(conv.get('_id'))
+                    except Exception:
+                        conv_obj_id = conv.get('_id')
                     # Set tags to bot-failed for this conversation
-                    conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    conv_model.collection.update_one({'_id': conv_obj_id}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     # Disable bot_reply so subsequent customer messages don't auto-reply
                     try:
                         conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
                         # ensure bot-failed tag remains after set_bot_reply_by_id adjusts tags
-                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                        conv_model.collection.update_one({'_id': conv_obj_id}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     except Exception:
                         pass
                     # Emit update so UI reflects failure
@@ -89,11 +95,16 @@ def _auto_reply_worker_zalo(mongo_client, integration, oa_id, customer_platform_
                 conv = conv_model.find_by_oa_and_customer(oa_id, f"zalo:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
                 if conv and conv.get('_id'):
                     try:
+                        from bson.objectid import ObjectId
+                        conv_obj_id = ObjectId(conv.get('_id'))
+                    except Exception:
+                        conv_obj_id = conv.get('_id')
+                    try:
                         conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
                     except Exception:
                         pass
                     try:
-                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                        conv_model.collection.update_one({'_id': conv_obj_id}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     except Exception:
                         pass
                     try:

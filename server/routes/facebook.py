@@ -118,10 +118,15 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                 conv_model = ConversationModel(mongo_client)
                 conv = conv_model.find_by_oa_and_customer(oa_id, f"facebook:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
                 if conv and conv.get('_id'):
-                    conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                    try:
+                        from bson.objectid import ObjectId
+                        conv_obj_id = ObjectId(conv.get('_id'))
+                    except Exception:
+                        conv_obj_id = conv.get('_id')
+                    conv_model.collection.update_one({'_id': conv_obj_id}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     try:
                         conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
-                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                        conv_model.collection.update_one({'_id': conv_obj_id}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     except Exception:
                         pass
                     try:
@@ -151,11 +156,16 @@ def _auto_reply_worker(mongo_client, integration, oa_id, customer_platform_id, c
                 conv = conv_model.find_by_oa_and_customer(oa_id, f"facebook:{customer_platform_id}", organization_id=organization_id, account_id=account_id_owner)
                 if conv and conv.get('_id'):
                     try:
+                        from bson.objectid import ObjectId
+                        conv_obj_id = ObjectId(conv.get('_id'))
+                    except Exception:
+                        conv_obj_id = conv.get('_id')
+                    try:
                         conv_model.set_bot_reply_by_id(conv.get('_id'), False, account_id=account_id_owner, organization_id=organization_id)
                     except Exception:
                         pass
                     try:
-                        conv_model.collection.update_one({'_id': conv.get('_id')}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
+                        conv_model.collection.update_one({'_id': conv_obj_id}, {'$set': {'tags': 'bot-failed', 'updated_at': datetime.utcnow()}})
                     except Exception:
                         pass
                     try:

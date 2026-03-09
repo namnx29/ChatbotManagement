@@ -149,8 +149,42 @@ def _auto_reply_worker_widget(mongo_client, oa_id, customer_id, conversation_id,
                 'conversation_id': conversation_id,
                 'sent_at': datetime.utcnow().isoformat() + 'Z',
                 'direction': 'out',
-                # 'handover': handover
             }
+
+            # Also fetch latest conversation state so we can broadcast updated
+            # bot_reply/tags in an update-conversation event (for realtime UI).
+            try:
+                conversation_doc = conversation_model.find_by_oa_and_customer(
+                    oa_id,
+                    customer_id,
+                    organization_id=organization_id,
+                )
+            except Exception:
+                conversation_doc = None
+
+            update_payload = None
+            if conversation_doc:
+                try:
+                    bot_flag = conversation_doc.get('bot_reply') if 'bot_reply' in conversation_doc else conversation_doc.get('bot-reply')
+                except Exception:
+                    bot_flag = None
+
+                update_payload = {
+                    'conversation_id': conversation_id,
+                    'conv_id': conv_id_legacy,
+                    'oa_id': oa_id,
+                    'customer_id': customer_id,
+                    'last_message': {
+                        'text': answer,
+                        'created_at': datetime.utcnow().isoformat() + 'Z',
+                    },
+                    'unread_count': conversation_doc.get('unread_count', 0),
+                    'customer_info': conversation_doc.get('customer_info', {}) or {},
+                    'bot_reply': bot_flag,
+                    'tags': conversation_doc.get('tags'),
+                    'platform': 'widget',
+                }
+
             # Prefer direct socketio emit if available (no Flask app context needed)
             if socketio:
                 org_room = f"organization:{str(organization_id)}"
@@ -158,9 +192,17 @@ def _auto_reply_worker_widget(mongo_client, oa_id, customer_id, conversation_id,
                     socketio.emit('new-message', payload, room=org_room)
                 except TypeError:
                     socketio.emit('new-message', payload, room=org_room)
+
+                if update_payload:
+                    try:
+                        socketio.emit('update-conversation', update_payload, room=org_room)
+                    except TypeError:
+                        socketio.emit('update-conversation', update_payload, room=org_room)
             else:
                 # Fallback to helper (requires app context)
                 _emit_socket('new-message', payload, account_id=None, organization_id=organization_id)
+                if update_payload:
+                    _emit_socket('update-conversation', update_payload, account_id=None, organization_id=organization_id)
         except Exception as e:
             logger.debug(f"Widget auto-reply: socket emit failed: {e}")
     except Exception as e:
@@ -678,8 +720,12 @@ def send_conversation_message(conv_id):
                     'conv_id': conv_id,
                     'oa_id': oa_id,
                     'customer_id': customer_id,
-                    'last_message': {'text': text if text else "Tệp đính kèm", 'created_at': datetime.utcnow().isoformat() + 'Z'},
-                    'unread_count': conversation_doc.get('unread_count', 0) if conversation_doc else 0,
+                    'last_message': {
+                        'text': text if text else "Tệp đính kèm",
+                        'created_at': datetime.utcnow().isoformat() + 'Z'
+                    },
+                    # Use latest conversation state (after increment_unread) instead of stale pre-update doc
+                    'unread_count': refreshed_conv.get('unread_count', 0) if refreshed_conv else 0,
                     'customer_info': sender_profile,
                     'platform': 'widget',
                     'tags': refreshed_conv.get('tags') if refreshed_conv else None,

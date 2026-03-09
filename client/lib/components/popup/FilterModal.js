@@ -1,6 +1,6 @@
 'use client';
 
-import { Modal, Checkbox, Button, Radio } from 'antd';
+import { Modal, Checkbox, Button } from 'antd';
 import { DownOutlined, UpOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 

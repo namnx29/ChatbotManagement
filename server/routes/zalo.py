@@ -1585,7 +1585,7 @@ def webhook_event():
                 if bot_flag is None:
                     bot_flag = conversation_doc.get('bot-reply') if conversation_doc else None
 
-                if direction == 'in' and bot_flag and not deduped:
+                if direction == 'in' and Config.USE_BOT and bot_flag and not deduped:
                     try:
                         mongo_client = current_app.mongo_client
                         socketio = getattr(current_app, 'socketio', None)

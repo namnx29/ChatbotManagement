@@ -2,7 +2,7 @@
 
 export default function TestPage() {
     return (
-        <div style={{ padding: '40px', fontFamily: 'sans-serif' }}>
+        <div style={{ padding: '40px', fontFamily: 'sans-serif', color: 'white' }}>
             <h1>Đây là Website của khách hàng</h1>
             <p>Chat widget sẽ hiện ở góc dưới bên phải...</p>
 

@@ -66,6 +66,10 @@ class Config:
     AI_API_USERNAME = os.getenv('AI_API_USERNAME', 'tuyennk')
     AI_API_PASSWORD = os.getenv('AI_API_PASSWORD', 'Tuyen123')
 
+    # Global bot auto-reply master switch.
+    # When false, inbound messages will not trigger bot auto-replies by default.
+    USE_BOT = os.getenv('USE_BOT', 'True').lower() in ('1', 'true', 'yes', 'y', 'on')
+
 class DevelopmentConfig(Config):
     """Development configuration"""
     DEBUG = True

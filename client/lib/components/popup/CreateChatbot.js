@@ -1,6 +1,6 @@
 'use client';
 
-import { Modal, Input, Select, Avatar, Button, Upload, message } from 'antd';
+import { Modal, Input, Select, Avatar, Button, Upload, App } from 'antd';
 import { CloseOutlined, PictureOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 import { createChatbot, uploadChatbotAvatar } from '@/lib/api';
@@ -14,7 +14,8 @@ export default function CreateChatbotModal({ open, onClose, onCreated }) {
   const [purpose, setPurpose] = useState('message');
   const [industry, setIndustry] = useState(null);
   const [loading, setLoading] = useState(false);
-
+  const { message } = App.useApp();
+  
   // Reset form when modal closes
   useEffect(() => {
     if (!open) {

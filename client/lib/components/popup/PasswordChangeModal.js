@@ -1,6 +1,6 @@
 "use client";
 
-import { Modal, Form, Input, Button, message } from "antd";
+import { Modal, Form, Input, Button, App } from "antd";
 import { changePassword } from "@/lib/api";
 import PasswordInputWithStrength from "@/lib/components/PasswordInputWithStrength";
 import { useState } from "react";
@@ -13,6 +13,7 @@ export default function PasswordChangeModal({
   const [passwordForm] = Form.useForm();
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+  const { message } = App.useApp();
 
   const handlePasswordSubmit = async (values) => {
     if (values.newPassword !== values.confirmNewPassword) {

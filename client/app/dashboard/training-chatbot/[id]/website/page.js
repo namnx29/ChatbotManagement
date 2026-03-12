@@ -17,7 +17,7 @@ export default function EmbedPage() {
 
     const embedCode = useMemo(
         () => `<script
-  src="http://103.7.40.236:3002/widget-sdk.js"
+  src="https://elcom.vn/widget-sdk.js"
   data-chatbot-id="${chatbotId}"
   async
   defer

@@ -6,6 +6,7 @@ bcrypt==4.1.0
 pymongo==4.5.0
 email-validator==2.1.0
 Flask-Login==0.6.3
+jwt==1.4.0
 
 # Zalo / Real-time / Scheduler / Redis / AI deps
 requests==2.31.0

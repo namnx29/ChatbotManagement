@@ -5,7 +5,6 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { usePublicPageGuard } from "@/lib/auth";
 import { verifyEmail } from "@/lib/api";
-import { message } from "antd";
 
 const { Title, Text } = Typography;
 

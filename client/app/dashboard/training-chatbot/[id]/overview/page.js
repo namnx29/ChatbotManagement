@@ -54,7 +54,7 @@ export default function BotOverviewPage() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          padding: "16px 20px",
+          padding: "13px 20px",
           borderBottom: "1px solid #f0f0f0",
           position: "sticky",
           top: 0,

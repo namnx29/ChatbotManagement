@@ -15,6 +15,7 @@ import { useEffect, useState, useRef } from "react";
 import { fetchProfile, uploadAvatar, getAvatarUrl } from "@/lib/api";
 import PasswordChangeModal from "@/lib/components/popup/PasswordChangeModal";
 import NameChangeModal from "@/lib/components/popup/NameChangeModal";
+import PhoneChangeModal from "@/lib/components/popup/PhoneChangeModal";
 
 const labelStyle = {
   color: "black",
@@ -67,6 +68,7 @@ export default function ProfilePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [nameModalVisible, setNameModalVisible] = useState(false);
+  const [phoneModalVisible, setPhoneModalVisible] = useState(false);
   const [role, setRole] = useState("");
 
   const fileInputRef = useRef(null);
@@ -202,6 +204,14 @@ export default function ProfilePage() {
 
   const handleNameModalClose = () => {
     setNameModalVisible(false);
+  };
+
+  const handlePhoneModalOpen = () => {
+    setPhoneModalVisible(true);
+  };
+
+  const handlePhoneModalClose = () => {
+    setPhoneModalVisible(false);
   };
 
   if (isLoading || !isAuthenticated) {
@@ -391,7 +401,13 @@ export default function ProfilePage() {
                 </>
               }
               actionComponent={
-                <a href="#" style={{ color: "#6c3fb5" }}>
+                <a
+                  href="#"
+                  style={{ color: "#6c3fb5" }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handlePhoneModalOpen();
+                  }}>
                   Chỉnh sửa
                 </a>
               }
@@ -410,6 +426,10 @@ export default function ProfilePage() {
         visible={nameModalVisible}
         onClose={handleNameModalClose}
         accountId={userId}
+      />
+      <PhoneChangeModal
+        open={phoneModalVisible}
+        onClose={handlePhoneModalClose}
       />
     </div>
   );

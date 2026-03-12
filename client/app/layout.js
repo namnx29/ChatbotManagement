@@ -26,7 +26,6 @@ export default function RootLayout({ children }) {
         <AntdRegistry>
           <ConfigProvider theme={{ token: { colorPrimary: "#6c3fb5" } }}>
             <App>
-              {/* Wrap children in Suspense here */}
               <Suspense fallback={null}> 
                 {children}
               </Suspense>
@@ -37,4 +36,3 @@ export default function RootLayout({ children }) {
     </html>
   );
 }
-

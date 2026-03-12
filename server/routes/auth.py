@@ -49,19 +49,6 @@ def init_auth_routes(mongo_client):
             # Create user with name and phone
             user = user_model.create_user(email, password, name, phone, role='admin')
             
-            # Create default test chatbot for this user
-            try:
-                chatbot_model.create_chatbot(
-                    account_id=user['accountId'],
-                    name='test',
-                    purpose='message',
-                    greeting='',
-                    fields=[],
-                    avatar_url=None
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create default chatbot for user {email}: {str(e)}")
-            
             # Generate verification link
             verification_link = f"{Config.FRONTEND_URL}/verify-email?token={user['verification_token']}&email={email}&accountId={user['accountId']}"
             

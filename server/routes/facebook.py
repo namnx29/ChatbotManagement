@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, redirect
 from models.integration import IntegrationModel
 from utils.redis_client import set_key, get_key, del_key
 from config import Config
@@ -420,7 +420,6 @@ def facebook_callback():
                 pic_data = pic_resp.json()
                 picture = pic_data.get('picture')
                 if isinstance(picture, dict):
-                    # Graph may return picture.data.url or picture.url
                     if isinstance(picture.get('data'), dict):
                         avatar_url = picture['data'].get('url')
                     else:
@@ -468,18 +467,18 @@ def facebook_callback():
         if existing_on_chatbot and existing_on_chatbot.get('oa_id') != page_id:
             if 'application/json' in accept or request.args.get('format') == 'json' or request.is_json:
                 return jsonify({'success': False, 'message': 'Chatbot already has a different Page connected', 'conflict': {'type': 'chatbot_has_other', 'chatbotId': chatbot_id, 'other_oa_id': existing_on_chatbot.get('oa_id')}}), 409
-            params = f"platform=facebook&oa_id={page_id}&status=conflict&conflict_type=chatbot_has_other&other_oa_id={existing_on_chatbot.get('oa_id')}"
+            conflict_params = f"platform=facebook&oa_id={page_id}&status=conflict&conflict_type=chatbot_has_other&other_oa_id={existing_on_chatbot.get('oa_id')}"
             if chatbot_id:
-                target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot/{chatbot_id}/platform-intergrate?{params}"
+                target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot/{chatbot_id}/platform-intergrate?{conflict_params}"
             else:
-                target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot?{params}"
-            from flask import redirect
+                target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot?{conflict_params}"
             try:
                 del_key(f"facebook:pkce:{state}")
             except Exception:
                 pass
             return redirect(target, code=302)
 
+    # Check if this Page is already connected to a different chatbot
     if existing_global and existing_global.get('chatbotId') and existing_global.get('chatbotId') != chatbot_id:
         conflict_chatbot_id = existing_global.get('chatbotId')
         conflict_bot_name = None
@@ -487,23 +486,20 @@ def facebook_callback():
             from models.chatbot import ChatbotModel
             cb_model = ChatbotModel(current_app.mongo_client)
             cb = cb_model.get_chatbot(conflict_chatbot_id)
-            try:
-                if not deduped:
-                    _emit_socket('new-message', {
-                        'platform': 'facebook',
-                        'oa_id': integration.get('oa_id'),
-                        'sender_id': customer_platform_id,
-                        'message': message_text,
-                        'message_doc': incoming_doc,
-                        'conv_id': conv_id,
-                        'conversation_id': conversation_id,  # New field (already string)
-                        'received_at' if direction == 'in' else 'sent_at': datetime.utcnow().isoformat(),
-                        'direction': direction,
-                        'sender_profile': sender_profile,
-                    }, account_id=account_id_owner, organization_id=integration.get('organizationId'))
-                    logger.info(f'Emitted new-message to account {account_id_owner} and org {integration.get("organizationId")} via socket')
-            except Exception as e:
-                logger.error(f'Failed to emit new-message via socket: {e}')
+            conflict_bot_name = cb.get('name') if cb else None
+        except Exception:
+            pass
+
+        if 'application/json' in accept or request.args.get('format') == 'json' or request.is_json:
+            return jsonify({'success': False, 'message': 'This Page is already connected to another chatbot', 'conflict': {'type': 'page_has_other_chatbot', 'chatbotId': conflict_chatbot_id, 'chatbot_name': conflict_bot_name}}), 409
+
+        conflict_params = f"platform=facebook&oa_id={page_id}&status=conflict&conflict_type=page_has_other_chatbot&other_chatbot_id={conflict_chatbot_id}"
+        if chatbot_id:
+            target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot/{chatbot_id}/platform-intergrate?{conflict_params}"
+        else:
+            target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot?{conflict_params}"
+        try:
+            del_key(f"facebook:pkce:{state}")
         except Exception:
             pass
         return redirect(target, code=302)
@@ -542,7 +538,6 @@ def facebook_callback():
     except Exception as e:
         logger.error(f"Emit integration-added failed: {e}")
 
-    # Log integration result for easier debugging and verification
     try:
         logger.info(f"Facebook integration persisted: platform=facebook, oa_id={integration.get('oa_id')}, account={integration.get('accountId')}, chatbotId={integration.get('chatbotId')}, avatar_url={integration.get('avatar_url')}")
     except Exception:
@@ -562,7 +557,6 @@ def facebook_callback():
     else:
         target = f"{Config.FRONTEND_URL}/dashboard/training-chatbot?platform=facebook&oa_id={page_id}&status={status}"
 
-    from flask import redirect
     return redirect(target, code=302)
 
 
@@ -891,7 +885,7 @@ def webhook_event():
                     # support legacy hyphenated field
                     bot_flag = conversation_doc.get('bot-reply') if conversation_doc else None
 
-                if direction == 'in' and bot_flag and not deduped:
+                if direction == 'in' and Config.USE_BOT and bot_flag and not deduped:
                     try:
                         mongo_client = current_app.mongo_client
                         socketio = getattr(current_app, 'socketio', None)

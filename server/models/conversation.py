@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from flask import current_app
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -212,15 +213,18 @@ class ConversationModel:
         else:
             # Document doesn't exist - use $setOnInsert for initial values
             initial_unread = 1 if (increment_unread and direction == 'in') else 0
-            # Default behavior: new conversations default to bot auto-reply ON
+            # Default behavior: new conversations default to global bot setting.
+            use_bot = bool(getattr(Config, 'USE_BOT', True))
+            set_on_insert = {
+                'created_at': now,
+                'unread_count': initial_unread,
+                'bot_reply': use_bot,
+            }
+            if use_bot:
+                set_on_insert['tags'] = 'bot-interacting'
             update_op = {
                 '$set': update_doc,
-                '$setOnInsert': {
-                    'created_at': now,
-                    'unread_count': initial_unread,
-                    'bot_reply': True,
-                    'tags': 'bot-interacting',
-                }
+                '$setOnInsert': set_on_insert
             }
 
         # Upsert conversation with account isolation

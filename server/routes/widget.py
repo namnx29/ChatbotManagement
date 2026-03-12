@@ -371,8 +371,16 @@ def submit_lead():
 
         # 6. Auto-reply for widget conversations (bot mode)
         try:
-            # The conversation was just created with bot_reply=True, so trigger auto-reply for incoming customer message with text
-            if message:
+            # Trigger auto-reply only when globally enabled and conversation bot_reply is enabled.
+            bot_flag = None
+            try:
+                bot_flag = conv.get('bot_reply') if isinstance(conv, dict) else None
+                if bot_flag is None and isinstance(conv, dict):
+                    bot_flag = conv.get('bot-reply')
+            except Exception:
+                bot_flag = None
+
+            if message and Config.USE_BOT and bot_flag:
                 try:
                     mongo_client = current_app.mongo_client
                     socketio = getattr(current_app, 'socketio', None)
@@ -780,7 +788,7 @@ def send_conversation_message(conv_id):
                 bot_flag = latest_conv.get('bot-reply') if 'bot-reply' in latest_conv else None
 
             # Only trigger auto-reply for incoming customer messages with text
-            if msg_direction == 'in' and bot_flag and text:
+            if msg_direction == 'in' and Config.USE_BOT and bot_flag and text:
                 try:
                     mongo_client = current_app.mongo_client
                     socketio = getattr(current_app, 'socketio', None)

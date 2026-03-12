@@ -249,6 +249,8 @@ def init_user_routes(mongo_client):
             name = data.get('name', '').strip()
             phone_number = data.get('phoneNumber', '').strip()
             password = data.get('password', '')
+            avatar = data.get('avatar', None)
+            zalo_user_id = data.get('zaloUserId', '')
             
             # Validation
             if not username:
@@ -271,7 +273,9 @@ def init_user_routes(mongo_client):
                 username=username,
                 name=name,
                 phone_number=phone_number if phone_number else None,
-                password=password
+                password=password,
+                avatar_url=avatar if avatar else None,
+                zalo_user_id=zalo_user_id
             )
             
             return jsonify({
@@ -281,7 +285,9 @@ def init_user_routes(mongo_client):
                     'accountId': staff['accountId'],
                     'username': staff['username'],
                     'name': staff['name'],
-                    'phoneNumber': staff['phone_number']
+                    'phoneNumber': staff['phone_number'],
+                    'avatarUrl': staff['avatar_url'],
+                    'zaloUserId': staff['zalo_user_id']
                 }
             }), 201
         
@@ -328,7 +334,8 @@ def init_user_routes(mongo_client):
                     'name': staff['name'],
                     'phoneNumber': staff['phone_number'],
                     'is_active': staff.get('is_active', True),
-                    'avatarUrl': staff.get('avatar_url', None)
+                    'avatarUrl': staff.get('avatar_url', None),
+                    'zaloUserId': staff.get('zalo_user_id', None)
                 })
             
             return jsonify({
@@ -415,6 +422,11 @@ def init_user_routes(mongo_client):
                     return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
                 updates['new_password'] = password
             
+            if 'avatar' in data:
+                updates['avatar_url'] = data['avatar']
+
+            updates['zalo_user_id'] = data['zaloUserId']
+            
             # Update staff
             updated_staff = user_model.update_staff(
                 staff_account_id=staff_account_id,
@@ -429,7 +441,9 @@ def init_user_routes(mongo_client):
                     'accountId': updated_staff['accountId'],
                     'username': updated_staff['username'],
                     'name': updated_staff['name'],
-                    'phoneNumber': updated_staff['phone_number']
+                    'phoneNumber': updated_staff['phone_number'],
+                    'avatarUrl': updated_staff['avatar_url'],
+                    'zaloUserId': updated_staff['zalo_user_id']
                 }
             }), 200
         
@@ -448,12 +462,22 @@ def init_user_routes(mongo_client):
             if not admin_account_id:
                 return jsonify({'success': False, 'message': 'Account ID is required'}), 400
             
+            user_data = user_model.find_by_account_id(staff_account_id)
+
+            from models.customer import CustomerModel
+            customer_model = CustomerModel(mongo_client)
+            customer_model.upsert_customer(
+                platform='zalo',
+                platform_specific_id=user_data.get('zalo_user_id'),
+                is_staff=False
+            )
+            
             # Delete staff
             user_model.delete_staff(
                 staff_account_id=staff_account_id,
                 parent_account_id=admin_account_id
             )
-            
+
             # Notify any active session for this staff to force logout in real-time
             try:
                 socketio = getattr(current_app, 'socketio', None)
@@ -540,5 +564,37 @@ def init_user_routes(mongo_client):
         except Exception as e:
             logger.error(f"Verify password error: {str(e)}")
             return jsonify({'success': False, 'message': 'Verification failed'}), 500
+
+    @user_bp.route('/staff/search', methods=['GET'])
+    def search_staff():
+        """Search staff accounts by name or email"""
+        try:
+            admin_account_id = get_account_id_from_request()
+            
+            if not admin_account_id:
+                return jsonify({'success': False, 'message': 'Account ID is required'}), 400
+            
+            query = request.args.get('q', '').strip()
+            
+            if not query:
+                return jsonify({'success': False, 'message': 'Search query is required'}), 400
+            
+            from models.customer import CustomerModel
+            customer_model = CustomerModel(mongo_client)
+
+            # Search staff accounts
+            staff_accounts = customer_model.find_by_name_or_phone(
+                platform='zalo',
+                query=query
+            )
+
+            return jsonify({
+                'success': True,
+                'data': staff_accounts
+            }), 200
+        
+        except Exception as e:
+            logger.error(f"Search staff error: {str(e)}")
+            return jsonify({'success': False, 'message': 'Failed to search staff accounts'}), 500
 
     return user_bp

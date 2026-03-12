@@ -22,13 +22,14 @@ class Config:
     LOGIN_SESSION_EXPIRY = int(os.getenv('LOGIN_SESSION_EXPIRY', 172800))  # 48 hours
     
     # Frontend URL
-    FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://103.7.40.236:3002')
+    FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://63.250.52.103:3002')
     
     # CORS configuration
     CORS_ORIGINS = [
         'http://localhost:3002',
         'http://127.0.0.1:3002',
         'http://103.7.40.236:3002',
+        'http://63.250.52.103:3002',
     ]
 
     # Zalo OA configuration

@@ -48,7 +48,7 @@ def create_app(env=None):
         raise
     
     # Setup CORS (allow credentials for session cookies)
-    CORS(app, resources={r"/api/*": {"origins": ["https://elcom.vn", "http://103.7.40.236:3002"]}}, supports_credentials=True)
+    CORS(app, resources={r"/api/*": {"origins": ["https://elcom.vn", "http://63.250.52.103:3002"]}}, supports_credentials=True)
     CORS(app, origins=app.config['CORS_ORIGINS'], supports_credentials=True)
 
     # Setup Flask-Login
@@ -370,7 +370,7 @@ if __name__ == '__main__':
     logger.info("=" * 50)
     logger.info(f"Environment: {app.config['FLASK_ENV']}")
     logger.info(f"Debug: {app.debug}")
-    logger.info(f"API Base URL: http://103.7.40.236:5002")
+    logger.info(f"API Base URL: http://63.250.52.103:5002")
     logger.info(f"Frontend URL: {app.config['FRONTEND_URL']}")
     logger.info("=" * 50)
     

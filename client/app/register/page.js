@@ -1,10 +1,6 @@
 "use client";
 
 import { Form, Input, Button, Typography, App } from "antd";
-import {
-  DownOutlined,
-  UpOutlined,
-} from "@ant-design/icons";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -25,8 +21,6 @@ export default function RegisterPage() {
   const { isChecking } = usePublicPageGuard();
 
   if (isChecking) return null;
-
-  const [isInputVisible, setIsInputVisible] = useState(false);
 
   const onFinish = async (values) => {
     // Validate password confirmation
@@ -194,41 +188,7 @@ export default function RegisterPage() {
               size="large"
               style={{ fontSize: "14px" }}
             />
-          </Form.Item>
-
-          <Form.Item
-            label={null}
-            colon={false}
-          >
-            <div
-              onClick={toggleInputVisibility}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                cursor: "pointer",
-                fontSize: "14px",
-                fontWeight: "bold",
-                color: "#333",
-              }}
-            >
-              <span style={{ marginRight: "8px"}}>Mã giảm giá (không bắt buộc)</span>
-              {isInputVisible ? (
-                <UpOutlined style={{ fontSize: "10px", color: "#888" }} />
-              ) : (
-                <DownOutlined style={{ fontSize: "10px", color: "#888" }} />
-              )}
-            </div>
-
-            {isInputVisible && (
-              <Form.Item name="discountCode" noStyle>
-                <Input
-                  placeholder="Nhập mã giảm giá"
-                  size="large"
-                  style={{ fontSize: "14px", marginTop: "4px" }}
-                />
-              </Form.Item>
-            )}
-          </Form.Item>
+          </Form.Item>          
 
           <Form.Item style={{ marginBottom: "16px" }}>
             <Button

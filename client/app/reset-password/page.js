@@ -1,7 +1,6 @@
 "use client";
 
-import { Form, Input, Button, Typography, message } from "antd";
-import { EyeInvisibleOutlined, EyeOutlined } from "@ant-design/icons";
+import { Form, Input, Button, Typography, App } from "antd";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -10,6 +9,7 @@ import { usePublicPageGuard } from "@/lib/auth";
 const { Title, Text } = Typography;
 
 export default function ResetPasswordPage() {
+  const { message } = App.useApp();
   // --- 1. ALL HOOKS MUST GO HERE ---
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);

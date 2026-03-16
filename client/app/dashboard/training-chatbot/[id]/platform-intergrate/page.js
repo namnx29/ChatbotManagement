@@ -42,11 +42,11 @@ export default function PlatformIntegrationPage() {
       name: "Facebook",
       icon: <FacebookFilled style={{ fontSize: "50px", color: "#1877f2" }} />,
     },
-    {
-      key: "instagram",
-      name: "Instagram",
-      icon: <InstagramFilled style={{ fontSize: "50px", color: "#e4405f" }} />,
-    },
+    // {
+    //   key: "instagram",
+    //   name: "Instagram",
+    //   icon: <InstagramFilled style={{ fontSize: "50px", color: "#e4405f" }} />,
+    // },
     {
       key: "zalo",
       name: "Zalo",
@@ -57,21 +57,21 @@ export default function PlatformIntegrationPage() {
       ),
       bgColor: "#0068ff",
     },
-    {
-      key: "lazada",
-      name: "Lazada",
-      icon: (
-        <div style={{ fontSize: "16px", fontWeight: "bold", color: "white" }}>
-          Laz
-        </div>
-      ),
-      bgColor: "#0f146d",
-    },
-    {
-      key: "tiktok",
-      name: "Tiktok",
-      icon: <TikTokOutlined style={{ fontSize: "50px" }} />,
-    },
+    // {
+    //   key: "lazada",
+    //   name: "Lazada",
+    //   icon: (
+    //     <div style={{ fontSize: "16px", fontWeight: "bold", color: "white" }}>
+    //       Laz
+    //     </div>
+    //   ),
+    //   bgColor: "#0f146d",
+    // },
+    // {
+    //   key: "tiktok",
+    //   name: "Tiktok",
+    //   icon: <TikTokOutlined style={{ fontSize: "50px" }} />,
+    // },
   ];
 
   const PlatformButton = ({ platform }) => (

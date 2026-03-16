@@ -49,7 +49,7 @@ const MAX_MESSAGES = 2000;
 const FILTER_OPTIONS = [
   { value: 'all', label: 'Tất cả kênh chat', icon: null },
   { value: 'facebook', label: 'Facebook', icon: '/Messenger.png' },
-  { value: 'instagram', label: 'Instagram', icon: '/Instagram.png' },
+  // { value: 'instagram', label: 'Instagram', icon: '/Instagram.png' },
   { value: 'zalo', label: 'Zalo', icon: '/Zalo.png' },
   { value: 'widget', label: 'Website', icon: <GlobalOutlined /> },
 ];

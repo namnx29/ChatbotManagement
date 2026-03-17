@@ -8,7 +8,6 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
-  UploadOutlined,
   FolderOpenOutlined,
   FileTextOutlined,
   GlobalOutlined,
@@ -20,15 +19,7 @@ import {
 } from "@ant-design/icons";
 
 const { Title, Text } = Typography;
-
-// --- MOCK DATA ---
-const MOCK_DB = [
-  { id: '1', name: 'Tài liệu kỹ thuật', type: 'folder', parentId: null, updatedAt: '2024-03-01' },
-  { id: '2', name: 'Quy trình nhân sự.pdf', type: 'file', parentId: null, updatedAt: '2024-02-28' },
-  { id: '3', name: 'Hướng dẫn sử dụng.docx', type: 'file', parentId: '1', updatedAt: '2024-03-02' },
-  { id: '4', name: 'API_Specs.json', type: 'file', parentId: '1', updatedAt: '2024-03-03' },
-  { id: '5', name: 'Hình ảnh dự án', type: 'folder', parentId: '1', updatedAt: '2024-03-01' },
-];
+const baseUrl = process.env.NEXT_PUBLIC_API_URL;
 
 export default function TrainingDataPage() {
   const { message, modal } = App.useApp();
@@ -43,9 +34,73 @@ export default function TrainingDataPage() {
     scan: false, export: false, upload: false, delete: null
   });
 
-  const [allData, setAllData] = useState(MOCK_DB);
+  const [allData, setAllData] = useState([]);
   const [currentFolderId, setCurrentFolderId] = useState(null);
   const [scanUrl, setScanUrl] = useState("");
+
+  const convertFilesToTree = (files) => {
+    const result = [];
+    const folderMap = {};
+
+    files.forEach((path) => {
+      const parts = path.split("/");
+      let parentId = null;
+      let currentPath = "";
+
+      parts.forEach((part, index) => {
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+
+        const isFile = index === parts.length - 1;
+
+        if (isFile) {
+          result.push({
+            id: `file-${currentPath}`,
+            name: part,
+            type: "file",
+            parentId: parentId,
+            fullPath: currentPath,
+            updatedAt: new Date().toISOString().split("T")[0]
+          });
+        } else {
+          if (!folderMap[currentPath]) {
+            const folderId = `folder-${currentPath}`;
+
+            folderMap[currentPath] = folderId;
+
+            result.push({
+              id: folderId,
+              name: part,
+              type: "folder",
+              parentId: parentId,
+              updatedAt: new Date().toISOString().split("T")[0]
+            });
+          }
+
+          parentId = folderMap[currentPath];
+        }
+      });
+    });
+
+    return result;
+  };
+
+  const fetchFiles = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/api/files`);
+      const data = await res.json();
+
+      const structuredData = convertFilesToTree(data.files);
+
+      setAllData(structuredData);
+
+    } catch (error) {
+      message.error("Không thể tải danh sách file");
+    }
+  };
+
+  useEffect(() => {
+    fetchFiles();
+  }, []);
 
   const runProgress = () => {
     setShowProgress(true);
@@ -66,23 +121,26 @@ export default function TrainingDataPage() {
   };
 
   const handleUploadFiles = async (options) => {
-    const { file } = options;
-    setBtnLoading(prev => ({ ...prev, upload: true }));
-    const progressInterval = runProgress();
+    const { file, onSuccess, onError } = options;
 
-    setTimeout(() => {
-      const newEntry = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: file.webkitRelativePath || file.name,
-        type: 'file',
-        parentId: currentFolderId,
-        updatedAt: new Date().toISOString().split('T')[0]
-      };
-      setAllData(prev => [...prev, newEntry]);
-      finishProgress(progressInterval);
-      setBtnLoading(prev => ({ ...prev, upload: false }));
-      message.success(`Đã tải lên: ${file.name}`);
-    }, 1000);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      await fetch(`${baseUrl}/api/upload`, {
+        method: "POST",
+        body: formData
+      });
+
+      onSuccess("ok");
+
+      message.success(`Uploaded ${file.name}`);
+
+      await fetchFiles();
+
+    } catch (err) {
+      onError(err);
+    }
   };
 
   // Cấu hình Menu cho Dropdown
@@ -170,23 +228,26 @@ export default function TrainingDataPage() {
     }, 2000);
   };
 
-  const handleExportJson = () => {
-    setBtnLoading(prev => ({ ...prev, export: true }));
-    const progressInterval = runProgress();
+  const exportTrainingJson = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/api/export-training-json`);
 
-    setTimeout(() => {
-      const dataToExport = { organizationId: "org_123", data: allData };
-      const blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
+      const blob = await res.blob();
+
+      const url = window.URL.createObjectURL(blob);
+
       const a = document.createElement("a");
       a.href = url;
-      a.download = `ai_training_data_${new Date().getTime()}.json`;
+      a.download = "training_data.json";
       a.click();
 
-      finishProgress(progressInterval);
-      setBtnLoading(prev => ({ ...prev, export: false }));
-      message.success("Đã xuất file JSON thành công");
-    }, 1500);
+      window.URL.revokeObjectURL(url);
+
+      message.success("Xuất file JSON thành công");
+
+    } catch (err) {
+      message.error("Không thể xuất file JSON");
+    }
   };
 
   const handleDelete = (record) => {
@@ -196,19 +257,34 @@ export default function TrainingDataPage() {
       content: `Dữ liệu "${record.name}" sẽ bị gỡ bỏ khỏi mô hình huấn luyện.`,
       okText: 'Xóa',
       okType: 'danger',
-      onOk: () => {
+
+      onOk: async () => {
         setBtnLoading(prev => ({ ...prev, delete: record.id }));
+
         const progressInterval = runProgress();
 
-        return new Promise((resolve) => {
-          setTimeout(() => {
-            setAllData(prev => prev.filter(item => item.id !== record.id));
-            finishProgress(progressInterval);
-            setBtnLoading(prev => ({ ...prev, delete: null }));
-            message.success("Đã xóa dữ liệu");
-            resolve();
-          }, 1000);
-        });
+        try {
+          const res = await fetch(`${baseUrl}/api/files/${encodeURIComponent(record.fullPath)}`, {
+            method: "DELETE"
+          });
+
+          const data = await res.json();
+
+          if (data.status === "success") {
+            message.success(`Đã xóa ${record.name}`);
+
+            await fetchFiles(); // refresh list
+          } else {
+            message.error("Xóa file thất bại");
+          }
+
+        } catch (error) {
+          message.error("Không thể xóa file");
+        }
+
+        finishProgress(progressInterval);
+
+        setBtnLoading(prev => ({ ...prev, delete: null }));
       },
     });
   };
@@ -222,7 +298,7 @@ export default function TrainingDataPage() {
             <Text type="secondary">Cung cấp dữ liệu để AI học từ File, Folder hoặc Website</Text>
           </div>
           <Space>
-            <Button icon={<DownloadOutlined />} onClick={handleExportJson} loading={btnLoading.export}>
+            <Button icon={<DownloadOutlined />} onClick={exportTrainingJson} loading={btnLoading.export}>
               Xuất Chat JSON
             </Button>
 

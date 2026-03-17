@@ -94,6 +94,13 @@ def create_app(env=None):
         app.register_blueprint(widget_bp)
     except Exception as e:
         logger.info(f"Widget routes not available: {e}")
+    
+    #Register file endpoints
+    try:
+        from routes.file import file_bp
+        app.register_blueprint(file_bp)
+    except Exception as e:
+        logger.info(f"File routes not available: {e}")
 
     # Attach mongo client to app for other modules
     app.mongo_client = mongo_client
